@@ -138,7 +138,7 @@ def get_session_history(session_id: str, user_id: str) -> CosmosDBChatMessageHis
 llm = AzureChatOpenAI(deployment_name=os.environ.get("AZURE_OPENAI_MODEL_NAME"), temperature=0, max_tokens=1500, streaming=True)
 
 # Initialize our Tools/Experts
-doc_indexes = ["srch-index-files", "srch-index-csv"]
+doc_indexes = os.environ.get("COG_INDEXES")
 
 doc_search = DocSearchAgent(llm=llm, indexes=doc_indexes,
                    k=6, reranker_th=1,

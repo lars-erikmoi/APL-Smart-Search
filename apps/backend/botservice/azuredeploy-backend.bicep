@@ -75,7 +75,7 @@ param appServicePlanName string = 'AppServicePlan-Backend-${uniqueString(resourc
   'S3'
   'P2v3'
 ])
-param appServicePlanSKU string = 'S3'
+param appServicePlanSKU string = 'B3'
 
 @description('Optional, defaults to resource group location. The location of the resources.')
 param location string = resourceGroup().location

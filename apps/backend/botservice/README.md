@@ -26,8 +26,10 @@ Below are the steps to run the Bot API as an Azure Wep App, connected with the A
 4. Using the Azure CLI deploy the bot code to the Azure App Service created on Step 2
 ```bash
 az login -i
-az webapp deployment source config-zip --resource-group "<resource-group-name>" --name "<name-of-backend-app-service>" --src "backend.zip"
+az webapp deployment source config-zip --resource-group "mighty-guinea-46743-southcentralus-rg" --name "webApp-Backend-BotId-ffpanhhmq7wy4" --src "backend.zip"
 ```
+az webapp deployment source config-zip --resource-group "mighty-guinea-46743-southcentralus-rg" --name "webApp-Frontend-ffpanhhmq7wy4" --src "frontend.zip"
+
 **Note**: If you get this error: `An error occured during deployment. Status Code: 401`. **Cause**: Some FDPO Azure Subscriptions disable Azure Web Apps Basic Authentication every minute (don't know why). **Solution**:  before running the above `az webapp deployment` command, make sure that your backend azure web app has `Basic Authentication ON`. In the Azure Portal, you can find this settting in: `Configuration->General Settings`.
 Don't worry if after running the command it says retrying many times, the zip files already uploaded and is building.
 
