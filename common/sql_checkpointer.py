@@ -1,4 +1,4 @@
-from langchain.pydantic_v1 import BaseModel, Field
+from pydantic import BaseModel, Field
 from sqlalchemy import create_engine, Column, Integer, String, LargeBinary, Table, MetaData, PrimaryKeyConstraint, select
 from sqlalchemy.orm import sessionmaker, Session, scoped_session
 from sqlalchemy.exc import SQLAlchemyError
@@ -33,7 +33,7 @@ checkpoints_table = Table(
 )
 
 class BaseCheckpointSaver(BaseModel):
-    
+
     engine: Optional[Engine] = None
     Session: Optional[scoped_session] = None
     is_setup: bool = Field(default=False)
@@ -43,7 +43,7 @@ class BaseCheckpointSaver(BaseModel):
         arbitrary_types_allowed = True
 
 class SQLAlchemyCheckpointSaver(BaseCheckpointSaver, AbstractContextManager):
-    
+
     def __init__(self, engine: Engine, *, serde: Optional[Serializable] = None, at: Optional[CheckpointAt] = None):
         # Call super with all expected fields by Pydantic
         super().__init__(serde=serde or pickle, at=at or CheckpointAt.END_OF_STEP, is_setup=False)
@@ -64,7 +64,7 @@ class SQLAlchemyCheckpointSaver(BaseCheckpointSaver, AbstractContextManager):
         )
         engine = create_engine(db_url)
         return cls(engine)
-    
+
     def __enter__(self):
         self.session = self.Session()
         return self
@@ -79,7 +79,7 @@ class SQLAlchemyCheckpointSaver(BaseCheckpointSaver, AbstractContextManager):
             self.Session.remove()
             self.session.close()
 
-        
+
     def setup(self):
         if not self.is_setup:
             # Create all tables if they don't exist

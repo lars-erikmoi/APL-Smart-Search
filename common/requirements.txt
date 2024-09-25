@@ -25,5 +25,5 @@ azure-storage-blob
 beautifulsoup4
 pydantic==1.10.13
 fastapi
-
-
+requests
+numpy

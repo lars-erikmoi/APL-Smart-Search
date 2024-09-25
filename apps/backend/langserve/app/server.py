@@ -11,15 +11,21 @@ from fastapi.responses import RedirectResponse
 
 from langserve import add_routes
 from langchain_openai import AzureChatOpenAI
-from langchain.pydantic_v1 import BaseModel
-from langchain.prompts import ChatPromptTemplate
-from langchain.schema.runnable import RunnableMap, RunnablePassthrough
+from pydantic import BaseModel
+from langchain_core.prompts import ChatPromptTemplate
+
+
+from langchain_core.runnables import RunnableMap
+
+from langchain_core.runnables import RunnablePassthrough
 from langchain_core.output_parsers import StrOutputParser
 from langchain_core.runnables import ConfigurableField, ConfigurableFieldSpec
 from langchain_core.runnables.history import RunnableWithMessageHistory
 from langchain_community.utilities import BingSearchAPIWrapper
 from langchain_community.chat_message_histories import CosmosDBChatMessageHistory
-from langchain.agents import AgentExecutor, Tool, create_openai_tools_agent
+from langchain.agents import AgentExecutor,  create_openai_tools_agent
+
+from langchain_core.tools import Tool
 
 
 ### uncomment this section to run server in local host #########
@@ -107,7 +113,7 @@ class InputJoke(TypedDict):
 class OutputJoke(TypedDict):
     content: chain.output_schema
     info: Dict[str, Any]
-    
+
 # Define the endpoint for this chain
 add_routes(
     app,

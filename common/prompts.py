@@ -79,6 +79,48 @@ CUSTOM_CHATBOT_PROMPT = ChatPromptTemplate.from_messages(
     ]
 )
 
+
+
+QUESTION_GENERATOR_PROMPT_TEXT = """
+
+
+Generate syllabus-related questions based solely on the provided documents (CONTEXT). The questions should:
+- Be clear, relevant to the material, and encourage critical thinking or analysis.
+- Cover a variety of question types, including:
+  1. Comprehension Questions: Simple factual questions based directly on the content.
+  2. Application Questions: Questions requiring the application of knowledge to new situations or problems.
+
+Guidelines:
+- Use only the information contained in the extracted parts (CONTEXT). Do not use prior knowledge or assumptions.
+- If a question is unclear, vague, or poorly formulated, suggest improvements or alternatives based on the document.
+- Tailor questions to specific points in the material to ensure they remain within scope.
+
+Handling no results:
+- If a generated question yields no relevant results, generate a new question based on the same context but from a different perspective. Avoid repeating or rephrasing the original question.
+
+Example:
+If the content discusses renewable energy and its benefits, and a question like:
+"How do solar and wind energy compare to fossil fuels in terms of environmental impact?"
+yields no results, a new question might be:
+"What are the key environmental advantages of using solar energy over fossil fuels?"
+
+"""
+
+
+QUESTION_GENERATOR_PROMPT = ChatPromptTemplate.from_messages(
+    [
+        ("system", QUESTION_GENERATOR_PROMPT_TEXT + "\n\nCONTEXT:\n{context}\n\n"),
+        MessagesPlaceholder(variable_name="history", optional=True),
+        ("human", "{question}"),
+    ]
+)
+
+
+
+
+
+
+
 DOCSEARCH_PROMPT_TEXT = """
 
 ## On your ability to answer question based on fetched documents (sources):

@@ -14,13 +14,13 @@ Also includes a Search experience.
 2. Zip the code of the bot by executing the following command in the terminal (you have to be inside the folder: apps/frontend/ ):
 
 ```bash
-zip frontend.zip ./* && zip frontend.zip ./pages/* && zip -j frontend.zip ../../common/*
+zip frontend.zip ./*  && zip -j frontend.zip ../../common/*
 ```
 3. Using the Azure CLI deploy the frontend code to the Azure App Service created on Step 2
 
 ```bash
 az login -i
-az webapp deployment source config-zip --resource-group "<resource-group-name>" --name "<name-of-frontend-app-service>" --src "frontend.zip"
+az webapp deployment source config-zip --resource-group "mighty-guinea-46743-southcentralus-rg" --name "webApp-Frontend-ffpanhhmq7wy4" --src "frontend.zip"
 ```
 
 
