@@ -10,45 +10,38 @@ from langchain.schema import Document
 from langchain_openai import AzureChatOpenAI
 from langchain.memory import ConversationBufferMemory
 import streamlit.components.v1 as components
-from utils import get_search_results, CustomAzureSearchQuestionReformulatorRetriever
+from pilot import chat_with_llm_stream, get_search_results
 from prompts import DOCSEARCH_PROMPT, QUESTION_GENERATOR_PROMPT
 import time  # For simulating the progress bar
-
 logging.basicConfig(filename='app.log', level=logging.INFO)
+
+# Set page configuration
+# Set page configuration
+st.set_page_config(page_title="APL Smart Search", page_icon="📖", layout="wide")
 
 # Add custom CSS styles
 st.markdown("""
     <style>
-    /* Adjust the padding of the main block container */
     .block-container {
-        padding-top: 1rem;
+        padding-top: 2rem;
         padding-bottom: 0rem;
     }
-    /* Style for the feedback link */
     .feedback-link {
         font-size: 12px;
         text-align: right;
+        margin-top: 1.5rem;
     }
     </style>
     """, unsafe_allow_html=True)
 
-# Create a container for the header
+# Header and Feedback Link
 with st.container():
-    # Create two columns for alignment
-    col1, col2 = st.columns([9, 1])  # Adjust the ratio as needed
-
-    # Title in the first (left) column
+    col1, col2 = st.columns([3, 1])
     with col1:
-        st.title("GPT Smart Search Engine")
-
-    # Feedback link in the second (right) column
+        st.header("APL Smart Search")
     with col2:
         st.markdown(
-            """
-            <div class="feedback-link">
-                <a href="https://your-feedback-link.com">Feedback</a>
-            </div>
-            """,
+            """<div class="feedback-link"><a href="https://engage.cloud.microsoft/main/groups/eyJfdHlwZSI6Ikdyb3VwIiwiaWQiOiIyMDMwOTM1NTcyNDgifQ/all">Give Feedback</a></div>""",
             unsafe_allow_html=True
         )
 
@@ -57,138 +50,125 @@ def clear_submit():
 
 # Sidebar instructions
 with st.sidebar:
-    st.markdown("""# Instructions""")
+    st.markdown("# App Instructions")
     st.markdown("""
-    Ask a question that you think can be answered with the information in about 10k Arxiv Computer Science publications from 2020-2021 or in 90k Medical Covid-19 Publications.
+
+# How to Use APL Smart Search
+The APL AI Smart Search tool provides answers exclusively from the uploaded documents, not from the internet or the chatbot’s internal knowledge. If the system doesn’t find the information, it will simply say: "I don't know."
+If the top answer isn't helpful, you can explore the additional search results below for more search hits.
+                
+**Example Questions:
+
+- Make an exhaustive requirement list on bolts.
+- Make an exhaustive requirement list on tubing.
+- What are the inspection requirements for welded joints?
+- Is there a 3.1 material certificate requirement for flexible hose end fittings?
+- How should flexible hoses be marked?
+- What bolt grade should I use for the piping system?
+- What are the warranty terms in the client contract?
+- What documents do clients request for review?
+- What does the contract say about liquidated damages?
+                
+# Feedback
+                
+Your feedback is crucial for improvement. If the search didn't find information that you later discovered was actually there, please share the search query, the search results, and the information you expected to find using the feedback button in the top right corner. This helps us make necessary improvements.
+Also, please share any success stories if this tool helped you in any way. It's the best way to demonstrate the value of investing in tools like this.
+
     """)
 
-# Index selection dropdown
-index_options = ["srch-index-books", "srch-index-pilot", "srch-index-csv"]
+# Main search area
+col_input, col_select, col_button = st.columns([2, 1, 0.5],vertical_alignment="bottom")
 
-coli1, coli2 = st.columns([3, 1])
-with coli1:
-    query = st.text_input("Ask a question to your enterprise data lake", 
-                          value="What are the main risk factors for Covid-19?", 
-                          on_change=clear_submit)
-    selected_index = st.selectbox("Choose Search Index", index_options)
+# Text input field
+with col_input:
+    query = st.text_input("Ask a question about your selected project", value=" Search Here ...", on_change=clear_submit)
 
-search_button = st.button('Search')
+# Selectbox for index selection
+with col_select:
+    index_mapping = {
+        "Bay du Nord": "srch-index-bay-du-nord",
+        "Books": "srch-index-books",
+        "Use cases": "srch-index-use-cases",
+    }
+    selected_label = st.selectbox("Choose What Project To Search In", list(index_mapping.keys()))
+    selected_index = index_mapping[selected_label]
 
-# API and key checks
-if not os.environ.get("AZURE_SEARCH_ENDPOINT"):
-    st.error("Please set your AZURE_SEARCH_ENDPOINT in your Web App Settings")
-elif not os.environ.get("AZURE_SEARCH_KEY"):
-    st.error("Please set your AZURE_SEARCH_KEY in your Web App Settings")
-elif not os.environ.get("AZURE_OPENAI_ENDPOINT"):
-    st.error("Please set your AZURE_OPENAI_ENDPOINT in your Web App Settings")
-elif not os.environ.get("AZURE_OPENAI_API_KEY"):
-    st.error("Please set your AZURE_OPENAI_API_KEY in your Web App Settings")
-elif not os.environ.get("BLOB_SAS_TOKEN"):
-    st.error("Please set your BLOB_SAS_TOKEN in your Web App Settings")
+# Search button
+with col_button:
+    search_button = st.button('Search')
+
+# Check required environment variables
+required_env_vars = [
+    "AZURE_SEARCH_ENDPOINT", "AZURE_SEARCH_KEY", "AZURE_OPENAI_ENDPOINT", "AZURE_OPENAI_API_KEY", "BLOB_SAS_TOKEN"
+]
+missing_env_vars = [var for var in required_env_vars if not os.environ.get(var)]
+
+if missing_env_vars:
+    st.error(f"Please set the following environment variables: {', '.join(missing_env_vars)}")
 else:
     os.environ["OPENAI_API_VERSION"] = os.environ["AZURE_OPENAI_API_VERSION"]
     MODEL = os.environ.get("AZURE_OPENAI_MODEL_NAME")
     llm = AzureChatOpenAI(deployment_name=MODEL, temperature=0.5, max_tokens=1000)
 
-if search_button or st.session_state.get("submit"):
-    if not query:
-        st.error("Please enter a question!")
-    else:
+    if search_button or st.session_state.get("submit"):
         try:
-            # Progress bar initialization
-            progress_text = "Operation in progress. Please wait."
-            my_bar = st.progress(0, text=progress_text)
-
-            # Step 1: Instantiate the retriever
-            retriever = CustomAzureSearchQuestionReformulatorRetriever(
-                indexes=[selected_index],
-                topK=10,
-                reranker_threshold=1,
-                sas_token=os.environ["BLOB_SAS_TOKEN"]
-            )
-            my_bar.progress(20, text="Retriever initialized...")
-
-            # Step 2: Retrieve relevant documents
-            with st.spinner("Retrieving relevant documents... ⏳"):
-                retriever.get_relevant_documents(query)
-            my_bar.progress(50, text="Documents retrieved...")
-
-            # Check if documents were found
-            if not retriever.context_docs:
-                st.warning("No relevant documents found to answer the question.")
-                my_bar.progress(100, text="Operation complete!")
+            if not query or query.strip() == "Search Here ...":
+                st.error("Please enter a valid question!")
             else:
-                # Prepare a placeholder for streaming the answer
-                response_placeholder = st.empty()
+                # Azure Search
+                try:
+                    k = 6
 
-                # Initialize the LLM with streaming=True
-                llm = AzureChatOpenAI(
-                    deployment_name=MODEL,
-                    temperature=0.5,
-                    max_tokens=1000,
-                    streaming=True
-                )
+                    with st.spinner(f"Searching {index_mapping[selected_label]}..."):
+                        ordered_results = get_search_results(query, [selected_index], k=k, reranker_threshold=1, sas_token=os.environ['BLOB_SAS_TOKEN'])
+                        st.session_state["submit"] = True
+                        answer_placeholder = st.empty()  # Placeholder for the streaming response
+                        results_placeholder = st.empty()  # Placeholder for search results
 
-                # Step 3: Get the chain and inputs for generating the answer
-                chain, inputs = retriever.get_answer_chain(llm, query)
+                except Exception as e:
+                    st.error("No data returned from Azure Search. Please check the connection.")
+                    logging.error(f"Search error: {e}")
 
-                if chain is None:
-                    st.warning("Unable to generate the answer.")
-                    my_bar.progress(100, text="Operation complete!")
-                else:
-                    my_bar.progress(60, text="Generating the answer...")
+            if "ordered_results" in locals():
+                try:
+                    top_docs = []
+                    for key, value in ordered_results.items():
+                        location = value.get("location", "")
+                        top_docs.append(Document(page_content=value["chunk"], metadata={"source": location, "score": value["score"]}))
 
-                    # Step 4: Run the chain with streaming using a generator
-                    accumulated_answer = ""
-                    for token in chain.stream(inputs):
-                        accumulated_answer += token
-                        response_placeholder.markdown(accumulated_answer)
+                    with st.spinner("Reading the source documents to provide the best answer... ⏳"):
+                        accumulated_answer = ""
 
-                    my_bar.progress(80, text="Answer generated...")
+                        if top_docs:
+                            # Stream the response using the chat_with_llm_stream function
+                            for token in chat_with_llm_stream(DOCSEARCH_PROMPT, llm, query, top_docs):
+                                accumulated_answer += token
+                                answer_placeholder.markdown(f"#### Answer\n{accumulated_answer}", unsafe_allow_html=True)
+                        else:
+                            answer_placeholder.markdown("#### Answer\nNo results found.", unsafe_allow_html=True)
 
-                    st.session_state["submit"] = True
-                    placeholder = st.empty()
-
-                    # Display the answer
-                    with placeholder.container():
-                        st.markdown("#### Answer")
-                        st.markdown(accumulated_answer, unsafe_allow_html=True)
+                    # Update the results placeholder after streaming is done
+                    with results_placeholder.container():
                         st.markdown("---")
-
-                        # Display the search results using retriever.context_docs
                         st.markdown("#### Search Results")
-                        for doc in retriever.context_docs:
-                            location = doc.metadata.get("source", "")
-                            score = doc.metadata.get("score", 0)
-                            score_percentage = str(round(float(score) * 100 / 4, 2))
 
-                            st.markdown(f"**Score**: {score_percentage}%")
-                            st.markdown(doc.page_content)
-                            st.markdown("---")
+                        if top_docs:
+                            for key, value in ordered_results.items():
+                                location = value.get("location", "")
+                                title = str(value.get('title', value['name']))
+                                score = str(round(value['score'] * 100 / 4, 2))
+                                st.markdown(f"**Location and Page:** [{location}]")
+                                st.markdown(f"**Score:** {score}%")
+                                st.markdown(value.get("caption", ""))
+                                st.markdown("---")
+                except Exception as e:
+                    st.error("Error processing documents.")
+                    logging.error(f"Document processing error: {e}")
 
-                        # Update progress bar to complete
-                        my_bar.progress(100, text="Operation complete!")
-
-                    # Add a reformulate button
-                    if "submit" in st.session_state and st.session_state.submit:
-                        reformulate_button = st.button('Reformulate Question')
-                        if reformulate_button:
-                            # Prepare a placeholder for streaming the reformulated question
-                            reformulate_placeholder = st.empty()
-
-                            # Get the chain and inputs for reformulating the question
-                            chain, inputs = retriever.get_new_question_chain(llm, query)
-
-                            if chain is None:
-                                st.warning("Unable to reformulate the question.")
-                            else:
-                                accumulated_question = ""
-                                for token in chain.stream(inputs):
-                                    accumulated_question += token
-                                    reformulate_placeholder.markdown(accumulated_question)
-
-                                st.markdown("#### Reformulated Question")
-                                st.markdown(accumulated_question)
+            # Reset submit state
+            st.session_state["submit"] = False
 
         except Exception as e:
             st.error(f"An error occurred: {e}")
+            logging.error(f"Unexpected error: {e}")
+
