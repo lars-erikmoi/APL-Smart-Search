@@ -13,7 +13,6 @@ import streamlit.components.v1 as components
 from pilot import chat_with_llm_stream, get_search_results
 from prompts import DOCSEARCH_PROMPT, QUESTION_GENERATOR_PROMPT
 import time  # For simulating the progress bar
-logging.basicConfig(filename='app.log', level=logging.INFO)
 
 # Set page configuration
 # Set page configuration
@@ -45,19 +44,21 @@ with st.container():
             unsafe_allow_html=True
         )
 
+
+
 def clear_submit():
-    st.session_state["submit"] = False
+    st.session_state["submit"] = True
 
 # Sidebar instructions
 with st.sidebar:
     st.markdown("# App Instructions")
     st.markdown("""
 
-# How to Use APL Smart Search
+### How to Use APL Smart Search
 The APL AI Smart Search tool provides answers exclusively from the uploaded documents, not from the internet or the chatbot’s internal knowledge. If the system doesn’t find the information, it will simply say: "I don't know."
 If the top answer isn't helpful, you can explore the additional search results below for more search hits.
                 
-**Example Questions:
+### Example Questions:
 
 - Make an exhaustive requirement list on bolts.
 - Make an exhaustive requirement list on tubing.
@@ -69,7 +70,7 @@ If the top answer isn't helpful, you can explore the additional search results b
 - What documents do clients request for review?
 - What does the contract say about liquidated damages?
                 
-# Feedback
+### Feedback
                 
 Your feedback is crucial for improvement. If the search didn't find information that you later discovered was actually there, please share the search query, the search results, and the information you expected to find using the feedback button in the top right corner. This helps us make necessary improvements.
 Also, please share any success stories if this tool helped you in any way. It's the best way to demonstrate the value of investing in tools like this.
@@ -81,14 +82,13 @@ col_input, col_select, col_button = st.columns([2, 1, 0.5],vertical_alignment="b
 
 # Text input field
 with col_input:
-    query = st.text_input("Ask a question about your selected project", value=" Search Here ...", on_change=clear_submit)
+    query = st.text_input("Ask A Question About Your Selected Project", value="", on_change=clear_submit)
 
 # Selectbox for index selection
 with col_select:
     index_mapping = {
-        "Bay du Nord": "srch-index-bay-du-nord",
-        "Books": "srch-index-books",
-        "Use cases": "srch-index-use-cases",
+        "2323 STP for Bay du Nord": "srch-index-bay-du-nord",
+        "2304 SLT for Also Tirreno": "srch-index-altso-tirreno",
     }
     selected_label = st.selectbox("Choose What Project To Search In", list(index_mapping.keys()))
     selected_index = index_mapping[selected_label]
@@ -108,20 +108,21 @@ if missing_env_vars:
 else:
     os.environ["OPENAI_API_VERSION"] = os.environ["AZURE_OPENAI_API_VERSION"]
     MODEL = os.environ.get("AZURE_OPENAI_MODEL_NAME")
-    llm = AzureChatOpenAI(deployment_name=MODEL, temperature=0.5, max_tokens=1000)
+    llm = AzureChatOpenAI(deployment_name=MODEL, temperature=0.4, max_tokens=1000)
 
     if search_button or st.session_state.get("submit"):
         try:
-            if not query or query.strip() == "Search Here ...":
+            if not query or query.strip() == "":
                 st.error("Please enter a valid question!")
             else:
                 # Azure Search
                 try:
                     k = 6
 
-                    with st.spinner(f"Searching {index_mapping[selected_label]}..."):
+                    with st.spinner(f"Searching {selected_label}..."):
                         ordered_results = get_search_results(query, [selected_index], k=k, reranker_threshold=1, sas_token=os.environ['BLOB_SAS_TOKEN'])
                         st.session_state["submit"] = True
+                        st.session_state["doneStreaming"] = False  # Reset doneStreaming state
                         answer_placeholder = st.empty()  # Placeholder for the streaming response
                         results_placeholder = st.empty()  # Placeholder for search results
 
@@ -132,35 +133,32 @@ else:
             if "ordered_results" in locals():
                 try:
                     top_docs = []
-                    for key, value in ordered_results.items():
-                        location = value.get("location", "")
-                        top_docs.append(Document(page_content=value["chunk"], metadata={"source": location, "score": value["score"]}))
-
                     with st.spinner("Reading the source documents to provide the best answer... ⏳"):
-                        accumulated_answer = ""
+                        for key, value in ordered_results.items():
+                            location = value.get("location", "")
+                            top_docs.append(Document(page_content=value["chunk"], metadata={"source": location, "score": value["score"]}))
 
-                        if top_docs:
-                            # Stream the response using the chat_with_llm_stream function
-                            for token in chat_with_llm_stream(DOCSEARCH_PROMPT, llm, query, top_docs):
-                                accumulated_answer += token
-                                answer_placeholder.markdown(f"#### Answer\n{accumulated_answer}", unsafe_allow_html=True)
-                        else:
-                            answer_placeholder.markdown("#### Answer\nNo results found.", unsafe_allow_html=True)
+                    if top_docs:
+                        # Stream the response
+                        st.markdown("#### Answer\n")
+                        st.markdown(chat_with_llm_stream(DOCSEARCH_PROMPT, llm, query, top_docs))
+                        st.session_state["doneStreaming"] = True  # Mark streaming as done
+                    else:
+                        st.write("#### Answer\nNo results found.")
 
-                    # Update the results placeholder after streaming is done
+                    # Display the search results after streaming is complete
                     with results_placeholder.container():
                         st.markdown("---")
                         st.markdown("#### Search Results")
+                        for key, value in ordered_results.items():
+                            location = value.get("location", "")
+                            title = str(value.get('title', value['name']))
+                            score = str(round(value['score'] * 100 / 4, 2))
+                            st.markdown(f"**Location and Page:** [{location}]")
+                            st.markdown(f"**Score:** {score}%")
+                            st.markdown(value.get("caption", ""))
+                            st.markdown("---")
 
-                        if top_docs:
-                            for key, value in ordered_results.items():
-                                location = value.get("location", "")
-                                title = str(value.get('title', value['name']))
-                                score = str(round(value['score'] * 100 / 4, 2))
-                                st.markdown(f"**Location and Page:** [{location}]")
-                                st.markdown(f"**Score:** {score}%")
-                                st.markdown(value.get("caption", ""))
-                                st.markdown("---")
                 except Exception as e:
                     st.error("Error processing documents.")
                     logging.error(f"Document processing error: {e}")
@@ -171,4 +169,3 @@ else:
         except Exception as e:
             st.error(f"An error occurred: {e}")
             logging.error(f"Unexpected error: {e}")
-

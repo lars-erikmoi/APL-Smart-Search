@@ -240,9 +240,7 @@ def chat_with_llm(pre_prompt, llm, query, context):
 
 def chat_with_llm_stream(pre_prompt, llm, query, context):
     # Create a placeholder for streaming the response
-    response_placeholder = st.empty()
-    # Start an empty string to accumulate the answer as it streams
-    accumulated_answer = ""
+
 
     # Chain processing
     chain = (
@@ -252,13 +250,8 @@ def chat_with_llm_stream(pre_prompt, llm, query, context):
     )
 
     # Stream the response by invoking the chain
-    for token in chain.stream({"question": query, "context": context}):
-        accumulated_answer += token  # Accumulate the tokens
-        response_placeholder.write(accumulated_answer)  # Update the placeholder progressively
-        yield token  # Yield the token for real-time processing outside the function
+    st.write_stream(chain.stream({"question": query, "context": context}))
 
-    # Clear the placeholder
-    response_placeholder.empty()
 
 
 
