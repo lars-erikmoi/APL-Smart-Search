@@ -10,9 +10,29 @@ from langchain.schema import Document
 from langchain_openai import AzureChatOpenAI
 from langchain.memory import ConversationBufferMemory
 import streamlit.components.v1 as components
-from pilot import chat_with_llm_stream, get_search_results
-from prompts import DOCSEARCH_PROMPT, QUESTION_GENERATOR_PROMPT
 import time  # For simulating the progress bar
+
+try:
+    from pilot import chat_with_llm_stream, get_search_results, reformulate_question
+    from prompts import DOCSEARCH_PROMPT, QUESTION_GENERATOR_PROMPT
+    from dotenv import load_dotenv
+    load_dotenv("credentials.env")
+    #for local testing print every credential
+
+except Exception as e:
+    print(e)
+    # if not found in the current directory, try the parent directory
+    import sys
+    sys.path.append("../../common")
+    from pilot import (chat_with_llm_stream, get_search_results, reformulate_question)
+    from prompts import DOCSEARCH_PROMPT, QUESTION_GENERATOR_PROMPT
+    sys.path.append("../../")
+    from dotenv import load_dotenv
+    load_dotenv(r"C:\Users\bakklandmoil\GPT-Azure-Search-Engine\credentials.env")
+    #for local testing print every credential
+
+
+
 
 # Set page configuration
 # Set page configuration
@@ -46,8 +66,27 @@ with st.container():
 
 
 
+#### Session State Variables ####
 def clear_submit():
     st.session_state["submit"] = True
+
+if "reformulated_questions" not in st.session_state:
+    st.session_state.reformulated_questions = []
+    st.session_state.show_suggestions = False 
+
+# Function to update the main query input
+def update_query_from_suggestion(suggestion):
+    st.session_state.query = suggestion
+    # Clear reformulated questions and hide suggestions
+    st.session_state.reformulated_questions = []
+    st.session_state.show_suggestions = False
+
+# Function to toggle visibility of reformulated suggestions
+def toggle_suggestions():
+    st.session_state.show_suggestions = False
+
+if "query" not in st.session_state:
+    st.session_state.query = ""
 
 # Sidebar instructions
 with st.sidebar:
@@ -82,20 +121,24 @@ col_input, col_select, col_button = st.columns([2, 1, 0.5],vertical_alignment="b
 
 # Text input field
 with col_input:
-    query = st.text_input("Ask A Question About Your Selected Project", value="", on_change=clear_submit)
+    query = st.text_input("Ask A Question About Your Selected Project", value=st.session_state.query, on_change=clear_submit)
 
 # Selectbox for index selection
 with col_select:
     index_mapping = {
         "2323 STP for Bay du Nord": "srch-index-bay-du-nord",
         "2304 SLT for Also Tirreno": "srch-index-altso-tirreno",
+        "2269 STP for B29 Polok & Chinwol": "srch-index-polok-chinwol",
     }
     selected_label = st.selectbox("Choose What Project To Search In", list(index_mapping.keys()))
     selected_index = index_mapping[selected_label]
 
 # Search button
 with col_button:
-    search_button = st.button('Search')
+    search_button = st.button('Search',on_click=clear_submit)
+
+
+coli_refac1, coli_refac2 , coli_refac3, coli_refac4, coli_refacButton = st.columns([1,1,1,1,1], vertical_alignment="bottom")
 
 # Check required environment variables
 required_env_vars = [
@@ -107,21 +150,55 @@ if missing_env_vars:
     st.error(f"Please set the following environment variables: {', '.join(missing_env_vars)}")
 else:
     os.environ["OPENAI_API_VERSION"] = os.environ["AZURE_OPENAI_API_VERSION"]
-    MODEL = os.environ.get("AZURE_OPENAI_MODEL_NAME")
+    MODEL = os.environ.get("GPT4_DEPLOYMENT_NAME")
     llm = AzureChatOpenAI(deployment_name=MODEL, temperature=0.4, max_tokens=1000)
+    with coli_refacButton:
+        if st.button('Reformulate Question'):
+            # Create empty context and append a placeholder document
+            empty_comtext = []
+            empty_value = {"chunk": "Empty", "score": 0.00, "location": "empty"}
+            empty_comtext.append(
+                Document(
+                    page_content=empty_value["chunk"], 
+                    metadata={"source": empty_value["location"], "score": empty_value["score"]}
+                )
+            )
 
-    if search_button or st.session_state.get("submit"):
+            # Call the function to reformulate the question
+            rfq = reformulate_question(llm, query, empty_comtext)
+
+            # If reformulation is successful, store the reformulated questions in session state
+            if rfq:
+                st.session_state.reformulated_questions = rfq
+                st.session_state.show_suggestions = True
+            else:
+                # Handle error if the reformulation fails
+                st.session_state.reformulated_questions = ["Error, try again", "Error, try again", "Error, try again", "Error, try again"]
+                st.session_state.show_suggestions = True
+
+# Display reformulated suggestions only if the button has been pressed
+    if st.session_state.show_suggestions:
+        coli_refac = [coli_refac1, coli_refac2, coli_refac3, coli_refac4]
+        for i, suggestion in enumerate(st.session_state.reformulated_questions):
+            with coli_refac[i]:
+                if st.button(f"{suggestion}", on_click=update_query_from_suggestion, args=(suggestion,)):
+                    update_query_from_suggestion(suggestion)
+
+    if search_button or st.session_state.get("submitSearch", False):
         try:
             if not query or query.strip() == "":
                 st.error("Please enter a valid question!")
             else:
                 # Azure Search
+
+                ordered_results = {}  # Initialize ordered_results as an empty dictionary
+
                 try:
                     k = 6
 
                     with st.spinner(f"Searching {selected_label}..."):
                         ordered_results = get_search_results(query, [selected_index], k=k, reranker_threshold=1, sas_token=os.environ['BLOB_SAS_TOKEN'])
-                        st.session_state["submit"] = True
+                        st.session_state["submitSearch"] = True
                         st.session_state["doneStreaming"] = False  # Reset doneStreaming state
                         answer_placeholder = st.empty()  # Placeholder for the streaming response
                         results_placeholder = st.empty()  # Placeholder for search results
@@ -129,42 +206,79 @@ else:
                 except Exception as e:
                     st.error("No data returned from Azure Search. Please check the connection.")
                     logging.error(f"Search error: {e}")
-
-            if "ordered_results" in locals():
+            
+            #print(ordered_results)
+            if ordered_results:
+                answer = st.container()
+                search = st.container()
                 try:
                     top_docs = []
                     with st.spinner("Reading the source documents to provide the best answer... ⏳"):
                         for key, value in ordered_results.items():
                             location = value.get("location", "")
-                            top_docs.append(Document(page_content=value["chunk"], metadata={"source": location, "score": value["score"]}))
+                            top_docs.append(Document(page_content=value.get("chunk", ""), metadata={"source": location, "score": value.get("score", 0)}))
 
+                    # Initialize `answer` to avoid displaying "None"
+                    answer_final = ""
+
+                    with search:
+                        write = st.write("")
                     if top_docs:
-                        # Stream the response
-                        st.markdown("#### Answer\n")
-                        st.markdown(chat_with_llm_stream(DOCSEARCH_PROMPT, llm, query, top_docs))
-                        st.session_state["doneStreaming"] = True  # Mark streaming as done
-                    else:
-                        st.write("#### Answer\nNo results found.")
-
-                    # Display the search results after streaming is complete
-                    with results_placeholder.container():
-                        st.markdown("---")
-                        st.markdown("#### Search Results")
-                        for key, value in ordered_results.items():
-                            location = value.get("location", "")
-                            title = str(value.get('title', value['name']))
-                            score = str(round(value['score'] * 100 / 4, 2))
-                            st.markdown(f"**Location and Page:** [{location}]")
-                            st.markdown(f"**Score:** {score}%")
-                            st.markdown(value.get("caption", ""))
+                        # Create a placeholder for the answer to handle streaming updates
+                        
+                        # Stream the response and update the placeholder
+                        with answer:
+                            st.markdown("#### Answer")
                             st.markdown("---")
 
+                            chat_with_llm_stream(DOCSEARCH_PROMPT, llm, query, top_docs)
+
+
+                        # Update the placeholder with the answer
+                        #answer_placeholder.markdown(answer, unsafe_allow_html=True)
+                    else:
+                        # If there are no top documents
+                        answer = "No results found."
+                        st.write(f"#### Answer\n{answer}")
+
+                    # Display the answer and search results in the new container
+
+                    print("doing search now")
+
+                    with search:
+                        st.markdown("---")
+                        st.markdown("#### Search Results")
+                        if top_docs:
+                            for key, value in ordered_results.items():
+                                    # Extract location, title, and other details safely
+                                location = value.get("location", "")
+                                title = str(value.get('title', value.get('name', 'Unnamed Document')))
+                                score = str(round(value.get('score', 0) * 100 / 4, 2))
+                                final_output = f"{location}"
+
+                                    # Display the results
+                                if location:  # Ensure location is not empty
+                                        # Concatenate name and page if 'page' is available
+                                    text = f"{value.get('name', 'Unnamed Document')} {value.get('page', '')}"
+                                        # Create clickable markdown with the final_output as the link
+                                    st.markdown(f"**Document**: [{text}]({final_output})")
+                                else:
+                                    st.markdown("No Page")
+                                    st.markdown(f"**Document**: [{title}]") 
+
+                                st.markdown(f"**Score**: {score}%")
+                                st.markdown(value.get("caption", "No caption available"))
+                                st.markdown("---")
+                        
                 except Exception as e:
                     st.error("Error processing documents.")
                     logging.error(f"Document processing error: {e}")
 
             # Reset submit state
-            st.session_state["submit"] = False
+            st.session_state["submitSearch"] = False
+
+
+
 
         except Exception as e:
             st.error(f"An error occurred: {e}")

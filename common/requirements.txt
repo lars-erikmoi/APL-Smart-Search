@@ -6,7 +6,7 @@ langchain-experimental
 langchain_mistralai
 langchain_cohere==0.1.5
 langgraph
-langserve[all]
+langserve
 langchain-cli
 botbuilder-integration-aiohttp>=4.14.4
 tiktoken

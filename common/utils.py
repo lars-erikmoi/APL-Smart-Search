@@ -125,6 +125,9 @@ def table_to_html(table):
     return table_html
 
 
+
+
+
 def parse_pdf(file, form_recognizer=False, formrecognizer_endpoint=None, formrecognizerkey=None, model="prebuilt-document", from_url=False, verbose=False):
     """Parses PDFs using PyPDF or Azure Document Intelligence SDK (former Azure Form Recognizer)"""
     offset = 0
