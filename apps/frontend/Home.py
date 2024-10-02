@@ -138,8 +138,8 @@ with col_button:
     search_button = st.button('Search',on_click=clear_submit)
 
 
-coli_refac1, coli_refac2 , coli_refac3, coli_refac4, coli_refacButton = st.columns([1,1,1,1,1], vertical_alignment="bottom")
-
+row1_col1, row1_col2, row1_col3 = st.columns([1, 1, 0.5], vertical_alignment="bottom")
+row2_col1, row2_col2, _ = st.columns([1, 1, 0.5], vertical_alignment="bottom")
 # Check required environment variables
 required_env_vars = [
     "AZURE_SEARCH_ENDPOINT", "AZURE_SEARCH_KEY", "AZURE_OPENAI_ENDPOINT", "AZURE_OPENAI_API_KEY", "BLOB_SAS_TOKEN"
@@ -152,7 +152,7 @@ else:
     os.environ["OPENAI_API_VERSION"] = os.environ["AZURE_OPENAI_API_VERSION"]
     MODEL = os.environ.get("GPT4_DEPLOYMENT_NAME")
     llm = AzureChatOpenAI(deployment_name=MODEL, temperature=0.4, max_tokens=1000)
-    with coli_refacButton:
+    with row1_col3:
         if st.button('Reformulate Question'):
             # Create empty context and append a placeholder document
             empty_comtext = []
@@ -178,9 +178,11 @@ else:
 
 # Display reformulated suggestions only if the button has been pressed
     if st.session_state.show_suggestions:
-        coli_refac = [coli_refac1, coli_refac2, coli_refac3, coli_refac4]
+        row1 = [row1_col1, row1_col2]
+        row2 = [row2_col1, row2_col2]
+        columns = row1 + row2
         for i, suggestion in enumerate(st.session_state.reformulated_questions):
-            with coli_refac[i]:
+            with columns[i]:
                 if st.button(f"{suggestion}", on_click=update_query_from_suggestion, args=(suggestion,)):
                     update_query_from_suggestion(suggestion)
 
