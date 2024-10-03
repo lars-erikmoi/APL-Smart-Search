@@ -38,6 +38,9 @@ except Exception as e:
 # Set page configuration
 st.set_page_config(page_title="APL Smart Search", page_icon="📖", layout="wide", )
 st.set_option("client.toolbarMode", "viewer")
+
+st.logo("APLNOV1.png")
+
 # Add custom CSS styles
 st.markdown("""
     <style>
@@ -68,7 +71,40 @@ with st.container():
             unsafe_allow_html=True
         )
 
+# Sidebar instructions
+with st.sidebar:
+    st.markdown("# App Instructions")
+    st.markdown("""
 
+### How to Use APL Smart Search
+The APL AI Smart Search tool provides answers exclusively from the uploaded documents, not from the internet or the chatbot’s internal knowledge. If the system doesn’t find the information, it will simply say: "I don't know."
+If the top answer isn't helpful, you can explore the additional search results below for more search hits.
+                
+### Example Questions:
+
+- Make an exhaustive requirement list on bolts.
+- Make an exhaustive requirement list on tubing.
+- What are the inspection requirements for welded joints?
+- Is there a 3.1 material certificate requirement for flexible hose end fittings?
+- How should flexible hoses be marked?
+- What bolt grade should I use for the piping system?
+- What are the warranty terms in the client contract?
+- What documents do clients request for review?
+- What does the contract say about liquidated damages?
+                
+### Feedback
+                
+Your feedback is crucial for improvement. If the search didn't find information that you later discovered was actually there, please share the search query, the search results, and the information you expected to find using the feedback button in the top right corner. This helps us make necessary improvements.
+Also, please share any success stories if this tool helped you in any way. It's the best way to demonstrate the value of investing in tools like this.
+
+    """)
+
+
+
+
+
+
+# Function to handle the search button and stop the search if it is running or start the search if it is not running
 def handle_search_button():
     if st.session_state['is_running']:
         # Stop the search
@@ -110,33 +146,7 @@ if "query" not in st.session_state:
     st.session_state.query = ""
 
 
-# Sidebar instructions
-with st.sidebar:
-    st.markdown("# App Instructions")
-    st.markdown("""
 
-### How to Use APL Smart Search
-The APL AI Smart Search tool provides answers exclusively from the uploaded documents, not from the internet or the chatbot’s internal knowledge. If the system doesn’t find the information, it will simply say: "I don't know."
-If the top answer isn't helpful, you can explore the additional search results below for more search hits.
-                
-### Example Questions:
-
-- Make an exhaustive requirement list on bolts.
-- Make an exhaustive requirement list on tubing.
-- What are the inspection requirements for welded joints?
-- Is there a 3.1 material certificate requirement for flexible hose end fittings?
-- How should flexible hoses be marked?
-- What bolt grade should I use for the piping system?
-- What are the warranty terms in the client contract?
-- What documents do clients request for review?
-- What does the contract say about liquidated damages?
-                
-### Feedback
-                
-Your feedback is crucial for improvement. If the search didn't find information that you later discovered was actually there, please share the search query, the search results, and the information you expected to find using the feedback button in the top right corner. This helps us make necessary improvements.
-Also, please share any success stories if this tool helped you in any way. It's the best way to demonstrate the value of investing in tools like this.
-
-    """)
 
 # Main search area
 col_input, col_select, col_button = st.columns([2, 1, 0.5],vertical_alignment="bottom")
@@ -155,12 +165,12 @@ with col_select:
     selected_label = st.selectbox("Choose What Project To Search In", list(index_mapping.keys()), help="Select the project to search in")
     selected_index = index_mapping[selected_label]
 
-# Search button
+# Search button to start or stop the search
 with col_button:
     button_label = "Stop" if st.session_state['is_running'] else "Search"
-    st.button(button_label,on_click=handle_search_button, help="Click to start or stop the search")
+    st.button(button_label, on_click=handle_search_button, help="Click to start or stop the search", type="primary" if st.session_state['is_running'] else "secondary")
 
-
+# Reformulate question button and suggestions
 row1_col1, row1_col2, row1_col3 = st.columns([1, 1, 0.5], vertical_alignment="bottom")
 row2_col1, row2_col2, _ = st.columns([1, 1, 0.5], vertical_alignment="bottom")
 
@@ -235,6 +245,7 @@ else:
                             st.session_state["doneStreaming"] = False 
                             answer_placeholder = st.empty()  # Placeholder for the streaming response
                             results_placeholder = st.empty()  # Placeholder for search results
+                            
 
                 except Exception as e:
                     st.error("No data returned from Azure Search. Please check the connection.")
