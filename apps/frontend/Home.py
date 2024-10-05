@@ -13,7 +13,7 @@ import streamlit.components.v1 as components
 import time  # For simulating the progress bar
 
 try:
-    from pilot import chat_with_llm_stream, get_search_results, reformulate_question
+    from pilot import chat_with_llm_stream, get_search_results, reformulate_question,chat_with_llm_stream2
     from prompts import DOCSEARCH_PROMPT, QUESTION_GENERATOR_PROMPT
     from dotenv import load_dotenv
     load_dotenv("credentials.env")
@@ -38,9 +38,6 @@ except Exception as e:
 # Set page configuration
 st.set_page_config(page_title="APL Smart Search", page_icon="📖", layout="wide", )
 st.set_option("client.toolbarMode", "viewer")
-
-st.logo("APLNOV1.png")
-
 # Add custom CSS styles
 st.markdown("""
     <style>
@@ -71,49 +68,27 @@ with st.container():
             unsafe_allow_html=True
         )
 
-# Sidebar instructions
-with st.sidebar:
-    st.markdown("# App Instructions")
-    st.markdown("""
 
-### How to Use APL Smart Search
-The APL AI Smart Search tool provides answers exclusively from the uploaded documents, not from the internet or the chatbot’s internal knowledge. If the system doesn’t find the information, it will simply say: "I don't know."
-If the top answer isn't helpful, you can explore the additional search results below for more search hits.
-                
-### Example Questions:
-
-- Make an exhaustive requirement list on bolts.
-- Make an exhaustive requirement list on tubing.
-- What are the inspection requirements for welded joints?
-- Is there a 3.1 material certificate requirement for flexible hose end fittings?
-- How should flexible hoses be marked?
-- What bolt grade should I use for the piping system?
-- What are the warranty terms in the client contract?
-- What documents do clients request for review?
-- What does the contract say about liquidated damages?
-                
-### Feedback
-                
-Your feedback is crucial for improvement. If the search didn't find information that you later discovered was actually there, please share the search query, the search results, and the information you expected to find using the feedback button in the top right corner. This helps us make necessary improvements.
-Also, please share any success stories if this tool helped you in any way. It's the best way to demonstrate the value of investing in tools like this.
-
-    """)
-
-
-
-
-
-
-# Function to handle the search button and stop the search if it is running or start the search if it is not running
+# Button functions for improved clarity and code readability
 def handle_search_button():
-    if st.session_state['is_running']:
-        # Stop the search
-        st.session_state['is_running'] = False
-        st.session_state["submitSearch"] = False  # Reset the submit state
-    else:
-        # Start the search
-        st.session_state['is_running'] = True
-        st.session_state["submitSearch"] = True
+    # Start the search
+    st.session_state['is_running'] = True
+    st.session_state["submitSearch"] = True
+    st.session_state["doneStreaming"] = False
+
+def handle_stop_button():
+    # Stop the search
+    st.session_state['is_running'] = False
+    st.session_state["submitSearch"] = False
+
+def handle_clear_button():
+    # Clear the results
+    st.session_state["doneStreaming"] = False
+    st.session_state["submitSearch"] = False
+    st.session_state.query = ""
+    st.session_state.show_results = False
+
+# Buttons display logic
 
 
 #### Session State Variables ####
@@ -145,8 +120,42 @@ def toggle_suggestions():
 if "query" not in st.session_state:
     st.session_state.query = ""
 
+if "doneStreaming" not in st.session_state:
+    st.session_state.doneStreaming = False
 
+if "stored_answer" not in st.session_state:
+    st.session_state.stored_answer = ""
+    
+if "stored_results" not in st.session_state:
+    st.session_state.stored_results = []
 
+# Sidebar instructions
+with st.sidebar:
+    st.markdown("# App Instructions")
+    st.markdown("""
+
+### How to Use APL Smart Search
+The APL AI Smart Search tool provides answers exclusively from the uploaded documents, not from the internet or the chatbot’s internal knowledge. If the system doesn’t find the information, it will simply say: "I don't know."
+If the top answer isn't helpful, you can explore the additional search results below for more search hits.
+                
+### Example Questions:
+
+- Make an exhaustive requirement list on bolts.
+- Make an exhaustive requirement list on tubing.
+- What are the inspection requirements for welded joints?
+- Is there a 3.1 material certificate requirement for flexible hose end fittings?
+- How should flexible hoses be marked?
+- What bolt grade should I use for the piping system?
+- What are the warranty terms in the client contract?
+- What documents do clients request for review?
+- What does the contract say about liquidated damages?
+                
+### Feedback
+                
+Your feedback is crucial for improvement. If the search didn't find information that you later discovered was actually there, please share the search query, the search results, and the information you expected to find using the feedback button in the top right corner. This helps us make necessary improvements.
+Also, please share any success stories if this tool helped you in any way. It's the best way to demonstrate the value of investing in tools like this.
+
+    """)
 
 # Main search area
 col_input, col_select, col_button = st.columns([2, 1, 0.5],vertical_alignment="bottom")
@@ -165,12 +174,18 @@ with col_select:
     selected_label = st.selectbox("Choose What Project To Search In", list(index_mapping.keys()), help="Select the project to search in")
     selected_index = index_mapping[selected_label]
 
-# Search button to start or stop the search
+# Search button
 with col_button:
-    button_label = "Stop" if st.session_state['is_running'] else "Search"
-    st.button(button_label, on_click=handle_search_button, help="Click to start or stop the search", type="primary" if st.session_state['is_running'] else "secondary")
+    if st.session_state['is_running']:
+        # Show Stop button when a search is running
+        st.button("Stop", on_click=handle_stop_button, help="Click to stop the search", type="primary")
 
-# Reformulate question button and suggestions
+    else:
+        # Show Search button when idle
+        st.button("Search", on_click=handle_search_button, help="Click to start a search", type="secondary")
+
+
+
 row1_col1, row1_col2, row1_col3 = st.columns([1, 1, 0.5], vertical_alignment="bottom")
 row2_col1, row2_col2, _ = st.columns([1, 1, 0.5], vertical_alignment="bottom")
 
@@ -223,13 +238,16 @@ else:
             with columns[i]:
                 if st.button(f"{suggestion}", on_click=update_query_from_suggestion, args=(suggestion,)):
                     update_query_from_suggestion(suggestion)
-
+    spinner_placeholder = st.empty()
+    answer = st.container()
+    search = st.container()
     # Main search logic
     if st.session_state["submitSearch"]:
         try:
             if not query or query.strip() == "":
                 st.error("Please enter a valid question!")
-                st.session_state['is_running'] = False  # Reset running state
+                st.session_state['is_running'] = False
+                  # Reset running state
             else:
                 # Azure Search
                 ordered_results = {}  # Initialize ordered_results as an empty dictionary
@@ -237,23 +255,22 @@ else:
                 try:
                     k = 6
                     st.session_state['is_running'] = True
-
                     if st.session_state['is_running']:
-                        with st.spinner(f"Searching {selected_label}..."):
-                            ordered_results = get_search_results(query, [selected_index], k=k, reranker_threshold=1, sas_token=os.environ['BLOB_SAS_TOKEN'])
-                            st.session_state["submitSearch"] = True
-                            st.session_state["doneStreaming"] = False 
-                            answer_placeholder = st.empty()  # Placeholder for the streaming response
-                            results_placeholder = st.empty()  # Placeholder for search results
-                            
+                        with spinner_placeholder.container():
+                            with st.spinner(f"Searching {selected_label}..."):
+                                ordered_results = get_search_results(query, [selected_index], k=k, reranker_threshold=1, sas_token=os.environ['BLOB_SAS_TOKEN'])
+                                st.session_state["submitSearch"] = True
+                                st.session_state["doneStreaming"] = False 
+                                answer_placeholder = st.empty()  # Placeholder for the streaming response
+                                results_placeholder = st.empty()  # Placeholder for search results
 
                 except Exception as e:
                     st.error("No data returned from Azure Search. Please check the connection.")
                     logging.error(f"Search error: {e}")
 
+
             if st.session_state['is_running'] and ordered_results:
-                answer = st.container()
-                search = st.container()
+
                 try:
                     top_docs = []
                     with st.spinner("Reading the source documents to provide the best answer... ⏳"):
@@ -264,15 +281,25 @@ else:
                             location = value.get("location", "")
                             top_docs.append(Document(page_content=value.get("chunk", ""), metadata={"source": location, "score": value.get("score", 0)}))
 
-                    # Display the answer and search results
-                    if top_docs:
-                        with answer:
-                            st.markdown("#### Answer")
-                            st.markdown("---")
-                            chat_with_llm_stream(DOCSEARCH_PROMPT, llm, query, top_docs)
-                    else:
-                        st.write(f"#### Answer\nNo results found.")
 
+                    if(len(top_docs)>0):     
+                                    with answer:
+                                        st.markdown("---")
+                                        answer2, response_placeholder = chat_with_llm_stream2(DOCSEARCH_PROMPT, llm, query, top_docs)
+                                        st.markdown(answer2, unsafe_allow_html=True)
+                                        st.session_state.stored_answer = answer2
+                                        st.session_state.stored_results = ordered_results
+  # Store the answer in session state
+
+                                 
+                    else:
+                                answer = {"No results found" }
+                    
+                    if response_placeholder:
+                            response_placeholder.empty()
+                                
+
+                    
                     with search:
                         st.markdown("---")
                         st.markdown("#### Search Results")
@@ -287,16 +314,54 @@ else:
                                 st.markdown(f"**Score**: {score}%")
                                 st.markdown(value.get("caption", "No caption available"))
                                 st.markdown("---")
+
                         
                 except Exception as e:
                     st.error("Error processing documents.")
                     logging.error(f"Document processing error: {e}")
 
-            # Reset states after completion
-            st.session_state["submitSearch"] = False
+            logging.info(f"submitSearch: {st.session_state['submitSearch']}")
+            logging.info(f"doneStreaming: {st.session_state['doneStreaming']}")
+            logging.info(f"is_running: {st.session_state['is_running']}")
             st.session_state["doneStreaming"] = True
-            st.session_state['is_running'] = False
+  
+
+
 
         except Exception as e:
             st.error(f"An error occurred: {e}")
             logging.error(f"Unexpected error: {e}")
+
+
+        finally:
+                # Reset states after completion
+                
+                st.session_state["submitSearch"] = False
+                st.session_state["doneStreaming"] = True
+                st.session_state['is_running'] = False
+                st.rerun()
+                logging.info(f"submitSearch in finally: {st.session_state['submitSearch']}")
+                logging.info(f"doneStreaming in finally: {st.session_state['doneStreaming']}")
+                logging.info(f"is_running in finally: {st.session_state['is_running']}")
+
+    if st.session_state.stored_answer and st.session_state.stored_results is not None:
+        if st.session_state["doneStreaming"] and not st.session_state["submitSearch"]:
+            with answer:
+                st.markdown("#### Answer")
+                st.markdown("---")
+                st.markdown(st.session_state.stored_answer, unsafe_allow_html=True)
+
+            with search:
+                st.markdown("---")
+                st.markdown("#### Search Results")
+                for key, value in st.session_state.stored_results.items():
+                    location = value.get("location", "")
+                    title = str(value.get('title', value.get('name', 'Unnamed Document')))
+                    score = str(round(value.get('score', 0) * 100 / 4, 2))
+                    final_output = f"{location}"
+                    text = f"{value.get('name', 'Unnamed Document')} {value.get('page', '')}"
+                    st.markdown(f"**Document**: [{text}]({final_output})")
+                    st.markdown(f"**Score**: {score}%")
+                    st.markdown(value.get("caption", "No caption available"))
+                    st.markdown("---")
+                        

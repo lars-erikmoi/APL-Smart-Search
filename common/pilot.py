@@ -117,7 +117,7 @@ import functools
 import logging
 
 # Set up basic configuration for logging
-logging.basicConfig(level=logging.DEBUG, format='%(asctime)s - %(levelname)s - %(message)s')
+logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 
 def debug(func):
     """A decorator that logs the function signature and return value"""
@@ -144,7 +144,7 @@ def timer(func):
         result = func(*args, **kwargs)
         end_time = time.time()  # End the timer
         runtime = end_time - start_time
-        logging.debug(f"{func.__name__!r} executed in {runtime:.4f} seconds")
+        logging.info(f"{func.__name__!r} executed in {runtime:.4f} seconds")
         return result
     return wrapper_timer
 
@@ -369,12 +369,11 @@ def get_search_results_EXP(query: str, indexes: list,
                 content_part = str(result['@search.captions'][0]['text'])
 
                 ###### EXPERIMENTAL: Try to extract page number from captions ######
-                #page_number = find_page_number_in_captions(result['chunk'], content_part)
                 page_url = ""
                 if result['name'].endswith(".pdf") or result['name'].endswith(".PDF"):
-                    page_match = re.search(r"page_(\d+)", str(result['title']))
-                    if page_match:
-                        page_number = str(page_match.group(1))
+                    page_number = find_text_in_pdf_with_chunks(result)
+                    if page_number:
+                
                         page_url = "#page=" + str(page_number)
 
                 else:
@@ -452,14 +451,11 @@ def chat_with_llm(pre_prompt, llm, query, context):
 
     answer = chain.invoke({"question": query, "context":context})
     return answer
+
 @timer
-@debug
 def chat_with_llm_stream(pre_prompt, llm, query, context):
     # Create a placeholder for streaming the response
-    print("Chain processing...")
-    print(f"Pre-prompt: {pre_prompt}")
-    print(f"Query: {query}")
-    print(f"Context: {context}")
+
     # Existing chain processing code
 
     # Chain processing
@@ -470,16 +466,47 @@ def chat_with_llm_stream(pre_prompt, llm, query, context):
     )
 
     # Stream the response by invoking the chain
-    st.write_stream(chain.stream({"question": query, "context": context}))
+    ans = st.write_stream(chain.stream({"question": query, "context": context}))
 
 
+
+@timer
+def chat_with_llm_stream2(pre_prompt, llm, query, context):
+
+    # Create a placeholder for streaming the response
+    response_placeholder = st.empty()
+
+    # Start an empty string to accumulate the answer as it streams
+    accumulated_answer = ""
+
+    # Chain processing
+    chain = (
+        pre_prompt  # Passes the variables to the prompt template
+        | llm  # Use streaming feature of the LLM
+        | StrOutputParser()  # Converts the output to a string
+    )
+
+
+    # Stream the response by invoking the chain
+    for token in chain.stream({"question": query, "context": context}):
+        accumulated_answer += token  # Accumulate the tokens
+        response_placeholder.markdown(f"#### Answer\n{accumulated_answer}")  # Update the placeholder progressively
+
+    # Clear the placeholder
+    # response_placeholder.empty()
+
+    return accumulated_answer, response_placeholder
 
 
 @functools.lru_cache(maxsize=32)
+@timer
 def download_pdf(pdf_url):
+    timer2 = time.time()
     response = requests.get(pdf_url)
     if response.status_code != 200:
         return None
+    timer = time.time() - timer2
+    print(f"Downloaded PDF in {timer} seconds")
     pdf_data = BytesIO(response.content)
     return fitz.open(stream=pdf_data, filetype="pdf")
 
@@ -530,3 +557,93 @@ def reformulate_question(llm, query, context):
     cleaned_questions = [question.strip("[]") for question in questions_array]
 
     return cleaned_questions
+
+
+
+
+import re
+from collections import deque
+
+@debug
+@timer
+def find_text_in_pdf_with_chunks(result):
+    pdf_url = str(result['location'])
+    content_part = str(result['@search.captions'][0]['text'])
+    chunk_part = result['chunk']  # Specific chunk provided
+    page_url = content_part
+    
+    # Download the PDF
+    doc = download_pdf(pdf_url)
+    if not doc:
+        return None  # Exit if the document couldn't be downloaded
+    
+    if chunk_part:
+        words = chunk_part.split()
+
+        # Generate search phrases using a sliding window (linked list) approach
+        def generate_phrases(words, initial_size):
+            phrases = []
+            # Initialize the deque with the first `initial_size` words
+            window = deque(words[:initial_size], maxlen=initial_size)
+            
+            # Add the initial phrase
+            phrases.append(' '.join(window))
+            
+            # Iterate over the remaining words
+            for word in words[initial_size:]:
+                # Slide the window: add the new word to the end, pop the first one
+                window.append(word)
+                phrases.append(' '.join(window))
+            
+            return phrases
+
+        # Create search phrases starting with both sizes 3 and 4
+        search_phrases = generate_phrases(words, 3) + generate_phrases(words, 4)
+
+        # Filter search phrases to only include alphanumeric and punctuation
+        filtered_phrases = [phrase for phrase in search_phrases if not re.search(r'[^a-zA-Z0-9.,:\s]', phrase)]
+
+        # Balanced search using an AVL tree-like approach: start in the middle
+        def balanced_search(phrases):
+            if not phrases:
+                return None
+
+            mid_index = len(phrases) // 2
+            mid_phrase = phrases[mid_index]
+
+            try:
+                result_search = find_search_term_in_pdf(doc, mid_phrase)
+            except Exception as e:
+                # Handle exceptions as needed (e.g., logging)
+                return None
+
+            if result_search:
+                # If a unique result is found, return it
+                if len(result_search) == 1:
+                    return result_search
+                
+                # Search in the left and right halves of the list
+                left_result = balanced_search(phrases[:mid_index])
+                if left_result:
+                    return left_result
+
+                right_result = balanced_search(phrases[mid_index + 1:])
+                return right_result
+
+            return None
+
+        # Call the balanced search on the filtered phrases
+        return balanced_search(filtered_phrases)
+
+    return None  # Return None if no unique page is found
+
+# Helper function to search for a term in the PDF
+def find_search_term_in_pdf(doc, search_term):
+    pages_with_term = []
+    for page_num in range(len(doc)):
+        page = doc.load_page(page_num)
+        text = page.get_text("text")
+        if search_term.lower() in text.lower():
+            pages_with_term.append(page_num + 1)  # Store page numbers starting from 1
+    
+    return pages_with_term
