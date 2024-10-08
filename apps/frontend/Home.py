@@ -167,7 +167,7 @@ with col_input:
 # Selectbox for index selection
 with col_select:
     index_mapping = {
-        "2323 STP for Bay du Nord": "srch-index-bay-du-nord",
+        "2371 STP for Bay du Nord": "srch-index-bay-du-nord",
         "2304 SLT for Also Tirreno": "srch-index-altso-tirreno",
         "2269 STP for B29 Polok & Chinwol": "srch-index-polok-chinwol",
     }
