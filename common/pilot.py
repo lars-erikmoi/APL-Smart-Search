@@ -115,24 +115,33 @@ import streamlit as st
 
 import functools
 import logging
-
+import threading
 # Set up basic configuration for logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 
+
 def debug(func):
-    """A decorator that logs the function signature and return value"""
+    """A decorator that logs the function signature and return value with a length limit"""
     @functools.wraps(func)
     def wrapper_debug(*args, **kwargs):
-        args_repr = [repr(a) for a in args]  # Represent each argument
-        kwargs_repr = [f"{k}={v!r}" for k, v in kwargs.items()]  # Represent each keyword argument
+        def truncate(value, length=100):
+            """Truncates the representation of value if it exceeds the specified length"""
+            value_str = repr(value)
+            return value_str if len(value_str) <= length else value_str[:length] + '...'
+
+        # Represent and truncate each argument
+        args_repr = [truncate(a) for a in args]
+        kwargs_repr = [f"{k}={truncate(v)}" for k, v in kwargs.items()]  # Represent each keyword argument
         signature = ", ".join(args_repr + kwargs_repr)
         logging.debug(f"Calling {func.__name__}({signature})")
         
         result = func(*args, **kwargs)
         
-        logging.debug(f"{func.__name__!r} returned {result!r}")
+        # Truncate result if it's too long
+        logging.debug(f"{func.__name__!r} returned {truncate(result)}")
         return result
     return wrapper_debug
+
 
 import time
 
@@ -151,60 +160,256 @@ def timer(func):
 
 
 
-def extract_all_page_numbers(chunk_text):
-    # Regular expression to match "Page X of Y" and extract all page numbers
-    page_matches = list(re.finditer(r'Page (\d+) of \d+', chunk_text, re.IGNORECASE))
-    # Create a list of tuples (page_number, position) for each page number found
-    page_numbers = [(int(match.group(1)), match.start()) for match in page_matches]
-    return page_numbers
-def select_relevant_page_number(chunk_text, caption_text):
-    # Extract all page numbers and their positions in the chunk
-    page_numbers = extract_all_page_numbers(chunk_text)
-    if not page_numbers:
-        return None
+import asyncio
+import httpx
+import concurrent.futures
+import fitz  # PyMuPDF for PDF processing
+import random
+import re
+import urllib
+from io import BytesIO
+from collections import OrderedDict
+@timer
+async def download_file_async(pdf_url, result_id, retries=3, delay=2):
+    """Download a file asynchronously with retry logic, keeping track of the PDF URL."""
+    attempt = 0
+    while attempt < retries:
+        try:
+            async with httpx.AsyncClient() as client:
+                response = await client.get(pdf_url)
+                if response.status_code == 200:
+                    pdf_data = BytesIO(response.content)
+                    # Check if the downloaded data has content
+                    if pdf_data.getbuffer().nbytes > 0:
+                        # Return the PDF URL along with the PDF data
+                        return pdf_url, pdf_data  # Use pdf_url, not result_id
+                    else:
+                        print(f"Warning: Downloaded PDF from {pdf_url} (ID: {result_id}) is empty.")
+                else:
+                    print(f"Failed to download {pdf_url} (ID: {result_id}): {response.status_code}")
+        except Exception as e:
+            print(f"Error downloading {pdf_url}, attempt {attempt + 1}/{retries} (ID: {result_id}): {e}")
+        
+        # Wait before retrying
+        attempt += 1
+        await asyncio.sleep(delay)
+    
+    print(f"Failed to download {pdf_url} after {retries} attempts. (ID: {result_id})")
+    return pdf_url, None  # Return pdf_url, not result_id
 
-    # Split caption text into word groups of 4 words each
-    words = caption_text.split()
-    word_groups = [' '.join(words[i:i + 4]) for i in range(len(words) - 3)]
-    filtered_groups = [group for group in word_groups if not re.search(r'[^a-zA-Z0-9.,:\s]', group)]
-
-    print(f"Filtered word groups: {filtered_groups}")
-
-    # Find the position of the first match of the word group in the chunk
-    for group in filtered_groups:
-        match = re.search(re.escape(group), chunk_text, re.IGNORECASE)
-        if match:
-            group_position = match.start()
-            # Determine the closest page number to this word group
-            print(f"Matched group: '{group}' at position {group_position}")
-
-            closest_page = None
-            closest_distance = float('inf')
-            for page_num, page_pos in page_numbers:
-                distance = abs(group_position - page_pos)
-                print(f"Page {page_num} at position {page_pos} has distance {distance}")
-                if distance < closest_distance:
-                    closest_distance = distance
-                    closest_page = page_num
-                    print(f"New closest page: {closest_page} with distance: {closest_distance}")
-
-            print(f"Selected page number: {closest_page}")
-
-            return closest_page +1
-
-    return None
-
-def find_page_number_in_captions(chunk_text, caption_text):
-    # Select the most relevant page number based on proximity
-    relevant_page_number = select_relevant_page_number(chunk_text, caption_text)
-    if relevant_page_number == None:
-        # If no relevant page number is found, return the first page number
-        page_numbers = extract_all_page_numbers(chunk_text)
-        if page_numbers:
-            relevant_page_number = page_numbers[0][0] + 1
-    return relevant_page_number
 
 @timer
+def create_location_to_result_map(search_results):
+    """Create a dictionary mapping PDF location to a list of result IDs."""
+    location_to_result_ids = {}
+
+    # Extract the actual search results from the 'value' field
+    if 'value' not in search_results:
+        print("No search results found.")
+        return location_to_result_ids
+
+    # Iterate over actual results in the 'value' field
+    for result in search_results['value']:
+        # Check if the result contains the expected keys
+        if isinstance(result, dict) and 'location' in result and 'id' in result:
+            location = result['location']
+            result_id = result['id']
+
+            # If this location is already in the dictionary, append the result_id
+            if location in location_to_result_ids:
+                location_to_result_ids[location].append(result_id)
+            else:
+                # Otherwise, create a new entry with this location
+                location_to_result_ids[location] = [result_id]
+        else:
+            print(f"Unexpected result format: {result}")  # Log unexpected result format for debugging
+
+    return location_to_result_ids
+
+
+
+
+def find_search_term_in_pdfAsync(pdf_stream, search_term):
+    """Search for a term in a PDF and return the page number."""
+    try:
+        logging.info(f"Searching for term '{search_term}' in PDF.")
+
+        pdf_doc = fitz.open(stream=pdf_stream, filetype="pdf")
+
+        for page_num in range(pdf_doc.page_count):
+            page = pdf_doc.load_page(page_num)
+            text = page.get_text("text")
+            if search_term.lower() in text.lower():
+                pdf_doc.close()
+                return [page_num + 1]  # Return the page number (1-based)
+        pdf_doc.close()
+    except Exception as e:
+        print(f"Error processing PDF: {e}")
+    return None
+
+async def download_all_pdfs_concurrently(document_name_to_result_ids):
+    """Download all unique PDFs concurrently and return a dictionary with document name as key and PDF stream as value."""
+    downloaded_pdfs = {}
+    
+    download_tasks = []
+    for document_name, result_ids in document_name_to_result_ids.items():
+        # Use the first result_id for the download task (it will only download once per document)
+        result_id = result_ids[0]
+        download_tasks.append(download_file_async(document_name, result_id))  # Download using document name (URL) and result_id
+    
+    # Perform all downloads concurrently
+    pdf_results = await asyncio.gather(*download_tasks)
+    
+    # Populate downloaded_pdfs with the results, mapping by document name (URL)
+    for document_name, pdf_stream in pdf_results:
+        if pdf_stream:  # Only add successful downloads
+            downloaded_pdfs[document_name] = pdf_stream
+            print(f"PDF downloaded successfully for document: {document_name}")
+        else:
+            print(f"PDF download failed for document: {document_name}")
+    
+    return downloaded_pdfs
+
+
+
+
+
+@timer
+def get_search_resultsAsync(query: str, indexes: list, k: int = 5, reranker_threshold: int = 1, use_captions: bool = True, sas_token: str = "") -> OrderedDict:
+    """Performs search and processes multiple results concurrently, ensuring consistent linking with IDs."""
+    headers = {'Content-Type': 'application/json', 'api-key': os.environ["AZURE_SEARCH_KEY"]}
+    params = {'api-version': os.environ['AZURE_SEARCH_API_VERSION']}
+
+    agg_search_results = dict()
+    for index in indexes:
+        search_payload = {
+            "search": query,
+            "select": "id, title, chunk, name, location",
+            "queryType": "semantic",
+            "vectorQueries": [{"text": query, "fields": "chunkVector", "kind": "text", "k": k}],
+            "semanticConfiguration": "my-semantic-config",
+            "captions": "extractive",
+            "answers": "extractive",
+            "count": "true",
+            "top": k    
+        }
+
+        resp = requests.post(os.environ['AZURE_SEARCH_ENDPOINT'] + "/indexes/" + index + "/docs/search",
+                             data=json.dumps(search_payload), headers=headers, params=params)
+        
+
+        print(resp.text)
+        if resp.status_code == 200:
+            search_results = resp.json()
+            agg_search_results[index] = search_results
+        else:
+            print(f"Failed to retrieve search results for index {index}: {resp.status_code}")
+
+
+
+    # Step 1: Create the mapping from location to result IDs
+    mappings = create_location_to_result_map(agg_search_results[index])
+
+    # Step 2: Download all PDFs concurrently (each location only once)
+    downloaded_pdfs = asyncio.run(download_all_pdfs_concurrently(mappings))
+
+    # Step 3: Process the PDFs and search for terms based on result IDs
+    content = OrderedDict()
+    # Iterate through the search results and handle both PDF and non-PDF files
+    for index, search_results in agg_search_results.items():
+        for result in search_results['value']:
+            result_id = result['id']
+            location = result['location']
+            file_name = result['name']
+            
+            # Check if the file is a PDF and handle accordingly
+            if file_name.endswith(".pdf") or file_name.endswith(".PDF"):
+                # Handle the downloaded PDFs
+                if location in downloaded_pdfs:
+                    pdf_stream = downloaded_pdfs[location]
+                    # Extract content to use (caption or highlights)
+                    content_to_use = (
+                        result.get('@search.captions', [{}])[0].get('highlights', "") if not use_captions
+                        else result.get('@search.captions', [{}])[0].get('text', "")
+                    )
+
+                    if content_to_use:
+                        words = content_to_use.split()
+                        word_groups = [' '.join(words[i:i + 4]) for i in range(len(words) - 3)]
+                        filtered_groups = [group for group in word_groups if not re.search(r'[^a-zA-Z0-9.,:\s]', group)]
+
+                        if not filtered_groups:
+                            print(f"No valid filtered groups found for result ID {result_id}. Skipping.")
+                            continue
+
+                        # Search in the PDF for the filtered group terms
+                        page_number = None
+                        for loop in range(15):
+                            search_term = random.choice(filtered_groups)
+                            page_number = find_search_term_in_pdfAsync(pdf_stream, search_term)
+
+                            if page_number:
+                                break
+
+                        if page_number is None:
+                            page_number = 1  # Default to page 1 if no page is found
+
+                        # Construct the page URL if the search term is found
+                        page_url = f"#page={page_number[0]}" if isinstance(page_number, list) else f"#page={page_number}"
+                        complete_location = f"{location}{page_url}"
+
+                        # Add the result to content with cross-referenced metadata
+                        content[result_id] = {
+                            "title": result['title'],
+                            "name": result['name'],
+                            "chunk": result['chunk'],
+                            "location": complete_location,
+                            "caption": content_to_use,
+                            "score": result['@search.rerankerScore'],
+                            "index": result.get('index'),
+                            "page": page_url
+                        }
+
+            # Handle non-PDF files (skip download but still include them in the results)
+            elif file_name.endswith(".xlsx") or file_name.endswith(".xls") or file_name.endswith(".csv") or file_name.endswith(".docx"):
+                print(f"Skipping download for non-PDF file: {file_name}")
+                
+                # Add the non-PDF file to the results with default page info
+                content[result_id] = {
+                    "title": result['title'],
+                    "name": result['name'],
+                    "chunk": result['chunk'],
+                    "location": location,
+                    "caption": result.get('@search.captions', [{}])[0].get('text', ""),
+                    "score": result['@search.rerankerScore'],
+                    "index": result.get('index'),
+                    "page": ""  # No page number for non-PDF files
+                }
+
+    print(f"Processed {len(content)} results with search terms found.")
+    
+    # Order and return top K results
+    try:
+        ordered_content = OrderedDict(sorted(content.items(), key=lambda x: x[1]["score"], reverse=True)[:k])
+    except TypeError as e:
+        print(f"Error while creating OrderedDict: {e}")
+        ordered_content = OrderedDict()
+
+    return ordered_content
+
+
+
+
+def extract_filtered_groups(content_part):
+    """Extract word groups from content, filtering unwanted characters."""
+    words = content_part.split()
+    word_groups = [' '.join(words[i:i + 4]) for i in range(len(words) - 3)]
+    filtered_groups = [group for group in word_groups if not re.search(r'[^a-zA-Z0-9.,:\s]', group)]
+    return filtered_groups
+
+
+
+
 def get_search_results(query: str, indexes: list, 
                        k: int = 5,
                        reranker_threshold: int = 1,
@@ -233,14 +438,12 @@ def get_search_results(query: str, indexes: list,
 
         resp = requests.post(os.environ['AZURE_SEARCH_ENDPOINT'] + "/indexes/" + index + "/docs/search",
                                      data=json.dumps(search_payload), headers=headers, params=params)
-
         search_results = resp.json()
         
         agg_search_results[index] = search_results
-    
+
     content = dict()
     ordered_content = OrderedDict()
-
     for index,search_results in agg_search_results.items():
         for result in search_results['value']:      
             if result['@search.rerankerScore'] > reranker_threshold: # Show results that are at least N% of the max possible score=4             
@@ -291,13 +494,14 @@ def get_search_results(query: str, indexes: list,
                 elif result['name'].endswith(".csv"):
                     page_url = ""
 
-                #if result['location']:
-                    #encoded_location = urllib.parse.quote(result['location'], safe='/:')
+                if result['location']:
+                    decoded_location = urllib.parse.unquote(result['location'])
+                    encoded_location = urllib.parse.quote(decoded_location, safe='/:')
                 content[result['id']]={
                                                 "title": result['title'], 
                                                 "name": result['name'], 
                                                 "chunk": result['chunk'],
-                                                "location":  result['location'] + page_url if result['location'] else "", #changed was + sas_token before if
+                                                "location": encoded_location + page_url if result['location'] else "", #changed was + sas_token before if
                                                 "caption": result['@search.captions'][0]['text'],
                                                 "score": result['@search.rerankerScore'],
                                                 "index": index,
@@ -306,6 +510,7 @@ def get_search_results(query: str, indexes: list,
 
     topk = k
     
+    
     count = 0  # To keep track of the number of results added
     for id in sorted(content, key=lambda x: content[x]["score"], reverse=True):
         ordered_content[id] = content[id]
@@ -315,128 +520,9 @@ def get_search_results(query: str, indexes: list,
     
     return ordered_content
 
-def get_search_results_EXP(query: str, indexes: list, 
-                       k: int = 5,
-                       reranker_threshold: int = 1,
-                       sas_token: str = "") -> List[dict]:
-    """Performs multi-index hybrid search and returns ordered dictionary with the combined results"""
-
-    headers = {'Content-Type': 'application/json', 'api-key': os.environ.get("AZURE_SEARCH_KEY", "")}
-    params = {'api-version': os.environ.get('AZURE_SEARCH_API_VERSION', "")}
-
-    agg_search_results = dict()
-
-    for index in indexes:
-        search_payload = {
-            "search": query,
-            "select": "id, title, chunk, name, location",
-            "queryType": "semantic",
-            "vectorQueries": [{"text": query, "fields": "chunkVector", "kind": "text", "k": k}],
-            "semanticConfiguration": "my-semantic-config",
-            "captions": "extractive",
-            "answers": "extractive",
-            "count": "true",
-            "top": k    
-        }
+# Updated get_search_results function
 
 
-
-        resp = requests.post(os.environ.get('AZURE_SEARCH_ENDPOINT', '') + f"/indexes/{index}/docs/search",
-                             data=json.dumps(search_payload), headers=headers, params=params)
-
-        if resp.status_code != 200:
-            st.error(f"Search request failed for index {index} with status code {resp.status_code}")
-            continue
-
-        #st.markdown(f"The response from the requests : {resp.text}")
-    
-        search_results = resp.json()
-        if 'value' not in search_results:
-            st.error(f"No search results found for index {index}")
-            st.error(search_results.get('value', ''))
-            st.error(search_results.get('error', ''))
-            continue
-
-        agg_search_results[index] = search_results
-
-    content = dict()
-    ordered_content = OrderedDict()
-
-    for index,search_results in agg_search_results.items():
-        for result in search_results['value']:
-            if result['@search.rerankerScore'] > reranker_threshold: # Show results that are at least N% of the max possible score=4
-                           # Try to extract caption text and search in the chunk
-                content_part = str(result['@search.captions'][0]['text'])
-
-                ###### EXPERIMENTAL: Try to extract page number from captions ######
-                page_url = ""
-                if result['name'].endswith(".pdf") or result['name'].endswith(".PDF"):
-                    page_number = find_text_in_pdf_with_chunks(result)
-                    if page_number:
-                
-                        page_url = "#page=" + str(page_number)
-
-                else:
-                    search_term = ""
-                    content_part = str(result['@search.captions'][0]['text'])
-                    page_url = content_part
-                    if content_part:
-                        words = content_part.split()
-                        word_groups = [' '.join(words[i:i+4]) for i in range(len(words)-3)]
-                        filtered_groups = [group for group in word_groups if not re.search(r'[^a-zA-Z0-9.,:\s]', group)]
-
-                        # Join the filtered groups into a single sentence
-
-                        for i in range(15):
-
-                            result_sentence = random.choice(filtered_groups) 
-                            try:
-                                result_search = find_search_term_in_pdf_from_url(str(result['location']), str(result_sentence))
-                            except Exception as e:
-                                raise
-
-                            if result_search:
-                                result_page = result_search
-
-                            if len(result_search) == 1:  # Condition to break the loop
-                                result_page = result_search
-                                break
-
-                        if result_page:  
-                            if result_page[0]:
-                                page_url = "#page=" + str(result_page[0])
-                            else:
-                                page_url = "#page=" + str(result_page)
-                        else:
-                            page_url = "#page=" + "1"
-                        '''if filtered_groups:
-                            search_term = urllib.parse.quote(random.choice(filtered_groups))
-                            page_url = "#search=" + str(search_term)'''
-                    else:
-                        page_url = "#page=" + "1"  # Default to page 1 if no page is found
-
-
-                        
-
-                content[result['id']]={
-                                        "title": result['title'], 
-                                        "name": result['name'], 
-                                        "chunk": result['chunk'],
-                                        "location": result['location'] + page_url if result['location'] else "", #changed was + sas_token before if
-                                        "caption": result['@search.captions'][0]['text'],
-                                        "score": result['@search.rerankerScore'],
-                                        "index": index,
-                                    } 
-
-    topk = k
-    count = 0  # To keep track of the number of results added
-    for id in sorted(content, key=lambda x: content[x]["score"], reverse=True):
-        ordered_content[id] = content[id]
-        count += 1
-        if count >= topk:  # Stop after adding topK results
-            break
-
-    return ordered_content
 
 
 
@@ -453,7 +539,7 @@ def chat_with_llm(pre_prompt, llm, query, context):
     return answer
 
 @timer
-def chat_with_llm_stream(pre_prompt, llm, query, context):
+def chat_with_llm_stream3(pre_prompt, llm, query, context):
     # Create a placeholder for streaming the response
 
     # Existing chain processing code
@@ -471,7 +557,8 @@ def chat_with_llm_stream(pre_prompt, llm, query, context):
 
 
 @timer
-def chat_with_llm_stream2(pre_prompt, llm, query, context):
+@debug
+def chat_with_llm_stream2(pre_prompt, llm, query, context, batch_size=10):
 
     # Create a placeholder for streaming the response
     response_placeholder = st.empty()
@@ -490,7 +577,7 @@ def chat_with_llm_stream2(pre_prompt, llm, query, context):
     # Stream the response by invoking the chain
     for token in chain.stream({"question": query, "context": context}):
         accumulated_answer += token  # Accumulate the tokens
-        response_placeholder.markdown(f"#### Answer\n{accumulated_answer}")  # Update the placeholder progressively
+        response_placeholder.markdown(f"#### Answer\n---\n{accumulated_answer}")  # Update the placeholder progressively
 
     # Clear the placeholder
     # response_placeholder.empty()
@@ -498,17 +585,63 @@ def chat_with_llm_stream2(pre_prompt, llm, query, context):
     return accumulated_answer, response_placeholder
 
 
+
+@timer
+@debug
+def chat_with_llm_stream(pre_prompt, llm, query, context, batch_size=1):
+    """
+    Streams response from the LLM in batches, progressively displaying it in the UI.
+    """
+
+    # Create a placeholder for streaming the response
+    response_placeholder = st.empty()
+
+    # Use a generator to yield tokens as they are generated
+    def token_generator(chain):
+        for i, token in enumerate(chain.stream({"question": query, "context": context})):
+            yield token
+
+    # Chain processing
+    chain = (
+        pre_prompt  # Passes the variables to the prompt template
+        | llm  # Use streaming feature of the LLM
+        | StrOutputParser()  # Converts the output to a string
+    )
+
+    # Use a list to accumulate tokens (more efficient than string concatenation)
+    accumulated_answer_list = []
+    token_batch = []
+
+    # Iterate over the generator and process tokens
+    for i, token in enumerate(token_generator(chain)):
+        token_batch.append(token)
+        accumulated_answer_list.append(token)  # Append tokens to the list
+
+        # Update the UI after every batch_size tokens
+        if i % batch_size == 0:
+            response_placeholder.markdown(f"#### Answer\n---\n{''.join(accumulated_answer_list)}", unsafe_allow_html=True)
+
+
+
+    response_placeholder.markdown(f"#### Answer\n---\n{''.join(accumulated_answer_list)}", unsafe_allow_html=True)
+
+
+    # Join the accumulated tokens into a final string
+    accumulated_answer = ''.join(accumulated_answer_list)
+
+    return accumulated_answer, response_placeholder
+
+
 @functools.lru_cache(maxsize=32)
 @timer
 def download_pdf(pdf_url):
-    timer2 = time.time()
     response = requests.get(pdf_url)
     if response.status_code != 200:
         return None
-    timer = time.time() - timer2
-    print(f"Downloaded PDF in {timer} seconds")
     pdf_data = BytesIO(response.content)
     return fitz.open(stream=pdf_data, filetype="pdf")
+
+
 
 @timer
 def find_search_term_in_pdf_from_url(pdf_url, search_term):
@@ -560,84 +693,8 @@ def reformulate_question(llm, query, context):
 
 
 
-
-import re
-from collections import deque
-
-@debug
-@timer
-def find_text_in_pdf_with_chunks(result):
-    pdf_url = str(result['location'])
-    content_part = str(result['@search.captions'][0]['text'])
-    chunk_part = result['chunk']  # Specific chunk provided
-    page_url = content_part
-    
-    # Download the PDF
-    doc = download_pdf(pdf_url)
-    if not doc:
-        return None  # Exit if the document couldn't be downloaded
-    
-    if chunk_part:
-        words = chunk_part.split()
-
-        # Generate search phrases using a sliding window (linked list) approach
-        def generate_phrases(words, initial_size):
-            phrases = []
-            # Initialize the deque with the first `initial_size` words
-            window = deque(words[:initial_size], maxlen=initial_size)
-            
-            # Add the initial phrase
-            phrases.append(' '.join(window))
-            
-            # Iterate over the remaining words
-            for word in words[initial_size:]:
-                # Slide the window: add the new word to the end, pop the first one
-                window.append(word)
-                phrases.append(' '.join(window))
-            
-            return phrases
-
-        # Create search phrases starting with both sizes 3 and 4
-        search_phrases = generate_phrases(words, 3) + generate_phrases(words, 4)
-
-        # Filter search phrases to only include alphanumeric and punctuation
-        filtered_phrases = [phrase for phrase in search_phrases if not re.search(r'[^a-zA-Z0-9.,:\s]', phrase)]
-
-        # Balanced search using an AVL tree-like approach: start in the middle
-        def balanced_search(phrases):
-            if not phrases:
-                return None
-
-            mid_index = len(phrases) // 2
-            mid_phrase = phrases[mid_index]
-
-            try:
-                result_search = find_search_term_in_pdf(doc, mid_phrase)
-            except Exception as e:
-                # Handle exceptions as needed (e.g., logging)
-                return None
-
-            if result_search:
-                # If a unique result is found, return it
-                if len(result_search) == 1:
-                    return result_search
-                
-                # Search in the left and right halves of the list
-                left_result = balanced_search(phrases[:mid_index])
-                if left_result:
-                    return left_result
-
-                right_result = balanced_search(phrases[mid_index + 1:])
-                return right_result
-
-            return None
-
-        # Call the balanced search on the filtered phrases
-        return balanced_search(filtered_phrases)
-
-    return None  # Return None if no unique page is found
-
 # Helper function to search for a term in the PDF
+@timer
 def find_search_term_in_pdf(doc, search_term):
     pages_with_term = []
     for page_num in range(len(doc)):
@@ -647,3 +704,9 @@ def find_search_term_in_pdf(doc, search_term):
             pages_with_term.append(page_num + 1)  # Store page numbers starting from 1
     
     return pages_with_term
+
+
+
+  
+
+

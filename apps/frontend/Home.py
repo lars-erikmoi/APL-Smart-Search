@@ -13,7 +13,7 @@ import streamlit.components.v1 as components
 import time  # For simulating the progress bar
 
 try:
-    from pilot import chat_with_llm_stream, get_search_results, reformulate_question,chat_with_llm_stream2
+    from pilot import chat_with_llm_stream, get_search_results, reformulate_question,chat_with_llm_stream2,get_search_resultsAsync
     from prompts import DOCSEARCH_PROMPT, QUESTION_GENERATOR_PROMPT
     from dotenv import load_dotenv
     load_dotenv("credentials.env")
@@ -24,7 +24,7 @@ except Exception as e:
     # if not found in the current directory, try the parent directory
     import sys
     sys.path.append("../../common")
-    from pilot import (chat_with_llm_stream, get_search_results, reformulate_question)
+    from pilot import (chat_with_llm_stream, get_search_results, reformulate_question,get_search_resultsAsync)
     from prompts import DOCSEARCH_PROMPT, QUESTION_GENERATOR_PROMPT
     sys.path.append("../../")
     from dotenv import load_dotenv
@@ -38,6 +38,8 @@ except Exception as e:
 # Set page configuration
 st.set_page_config(page_title="APL Smart Search", page_icon="📖", layout="wide", )
 st.set_option("client.toolbarMode", "viewer")
+st.logo("APLNOV1.png")
+
 # Add custom CSS styles
 st.markdown("""
     <style>
@@ -54,6 +56,11 @@ st.markdown("""
         visibility: hidden;
         height: 0px;
     }
+        /* Hides the element with data-testid="InputInstructions" */
+    [data-testid="InputInstructions"] {
+        display: none;
+    }
+}
     </style>
     """, unsafe_allow_html=True)
 
@@ -129,6 +136,9 @@ if "stored_answer" not in st.session_state:
 if "stored_results" not in st.session_state:
     st.session_state.stored_results = []
 
+if "Error" not in st.session_state:
+    st.session_state.Error = None
+    
 # Sidebar instructions
 with st.sidebar:
     st.markdown("# App Instructions")
@@ -167,9 +177,9 @@ with col_input:
 # Selectbox for index selection
 with col_select:
     index_mapping = {
-        "2371 STP for Bay du Nord": "srch-index-bay-du-nord",
-        "2304 SLT for Also Tirreno": "srch-index-altso-tirreno",
-        "2269 STP for B29 Polok & Chinwol": "srch-index-polok-chinwol",
+        "2304 SLT Alto Tirreno": "srch-index-alto-tirreno",
+        "2371 STP Bay du Nord": "srch-index-bay-du-nord",
+        "2269 STP B29 Polok & Chinwol": "srch-index-polok-chinwol"
     }
     selected_label = st.selectbox("Choose What Project To Search In", list(index_mapping.keys()), help="Select the project to search in")
     selected_index = index_mapping[selected_label]
@@ -202,7 +212,7 @@ if missing_env_vars:
 else:
     os.environ["OPENAI_API_VERSION"] = os.environ["AZURE_OPENAI_API_VERSION"]
     MODEL = os.environ.get("GPT4_DEPLOYMENT_NAME")
-    llm = AzureChatOpenAI(deployment_name=MODEL, temperature=0.4, max_tokens=1000)
+    llm = AzureChatOpenAI(deployment_name=MODEL, temperature=0.2, max_tokens=1000)
 
     # Handle "Reformulate Question" button
     with row1_col3:
@@ -258,7 +268,7 @@ else:
                     if st.session_state['is_running']:
                         with spinner_placeholder.container():
                             with st.spinner(f"Searching {selected_label}..."):
-                                ordered_results = get_search_results(query, [selected_index], k=k, reranker_threshold=1, sas_token=os.environ['BLOB_SAS_TOKEN'])
+                                ordered_results = get_search_resultsAsync(query, [selected_index], k=k, reranker_threshold=1, sas_token=os.environ['BLOB_SAS_TOKEN'])
                                 st.session_state["submitSearch"] = True
                                 st.session_state["doneStreaming"] = False 
                                 answer_placeholder = st.empty()  # Placeholder for the streaming response
@@ -266,7 +276,12 @@ else:
 
                 except Exception as e:
                     st.error("No data returned from Azure Search. Please check the connection.")
+                    st.session_state['is_running'] = False
+                    st.session_state["submitSearch"] = False
+                    st.session_state["doneStreaming"] = True
+                    st.session_state["Error"] = "No data returned from Azure Search. Refine search query and try again."
                     logging.error(f"Search error: {e}")
+                    st.rerun()
 
 
             if st.session_state['is_running'] and ordered_results:
@@ -284,9 +299,11 @@ else:
 
                     if(len(top_docs)>0):     
                                     with answer:
-                                        st.markdown("---")
-                                        answer2, response_placeholder = chat_with_llm_stream2(DOCSEARCH_PROMPT, llm, query, top_docs)
+                                        #st.markdown("---")
+                                        answer2, response_placeholder = chat_with_llm_stream(DOCSEARCH_PROMPT, llm, query, top_docs)
+                                        #st.markdown(response_placeholder, unsafe_allow_html=True)
                                         st.markdown(answer2, unsafe_allow_html=True)
+
                                         st.session_state.stored_answer = answer2
                                         st.session_state.stored_results = ordered_results
   # Store the answer in session state
@@ -344,6 +361,9 @@ else:
                 logging.info(f"doneStreaming in finally: {st.session_state['doneStreaming']}")
                 logging.info(f"is_running in finally: {st.session_state['is_running']}")
 
+
+    if st.session_state.Error is not None:
+        st.error(st.session_state.Error)
     if st.session_state.stored_answer and st.session_state.stored_results is not None:
         if st.session_state["doneStreaming"] and not st.session_state["submitSearch"]:
             with answer:
