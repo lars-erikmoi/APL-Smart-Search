@@ -298,7 +298,6 @@ def get_search_resultsAsync(query: str, indexes: list, k: int = 5, reranker_thre
                              data=json.dumps(search_payload), headers=headers, params=params)
         
 
-        print(resp.text)
         if resp.status_code == 200:
             search_results = resp.json()
             agg_search_results[index] = search_results
@@ -331,7 +330,7 @@ def get_search_resultsAsync(query: str, indexes: list, k: int = 5, reranker_thre
                     content_to_use = (
                         result.get('@search.captions', [{}])[0].get('highlights', "") if not use_captions
                         else result.get('@search.captions', [{}])[0].get('text', "")
-                    )
+                    )   
 
                     if content_to_use:
                         words = content_to_use.split()
@@ -539,7 +538,7 @@ def chat_with_llm(pre_prompt, llm, query, context):
     return answer
 
 @timer
-def chat_with_llm_stream3(pre_prompt, llm, query, context):
+def chat_with_llm_stream(pre_prompt, llm, query, context):
     # Create a placeholder for streaming the response
 
     # Existing chain processing code
@@ -553,11 +552,11 @@ def chat_with_llm_stream3(pre_prompt, llm, query, context):
 
     # Stream the response by invoking the chain
     ans = st.write_stream(chain.stream({"question": query, "context": context}))
+    return ans
 
 
 
 @timer
-@debug
 def chat_with_llm_stream2(pre_prompt, llm, query, context, batch_size=10):
 
     # Create a placeholder for streaming the response
@@ -587,8 +586,7 @@ def chat_with_llm_stream2(pre_prompt, llm, query, context, batch_size=10):
 
 
 @timer
-@debug
-def chat_with_llm_stream(pre_prompt, llm, query, context, batch_size=1):
+def chat_with_llm_stream3(pre_prompt, llm, query, context, batch_size=1):
     """
     Streams response from the LLM in batches, progressively displaying it in the UI.
     """
@@ -667,10 +665,8 @@ def find_search_term_in_pdf_from_url(pdf_url, search_term):
 
 def reformulate_question(llm, query, context):
     PRE_PROMPT_TEXT = '''
-    I want you to reformulate the question so it will be formulated better when doing an semantic search. 
-    I want you to give 4 diffrent suggestions and the answer i want back from you is in the format of 
-    [reformulated question 1], [reformulated question 2], [reformulated question 3], [reformulated question 4]. 
-    And it should be done exactly like that. 
+Reformulate the question so it improves semantic search accuracy. Provide four different suggestions, and the answer should follow the exact format:
+[reformulated question 1], [reformulated question 2], [reformulated question 3], [reformulated question 4]. Make sure the structure matches precisely.
     '''
 
     # Create the prompt template using ChatPromptTemplate and from_messages

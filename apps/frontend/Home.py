@@ -11,6 +11,7 @@ from langchain_openai import AzureChatOpenAI
 from langchain.memory import ConversationBufferMemory
 import streamlit.components.v1 as components
 import time  # For simulating the progress bar
+import asyncio
 
 try:
     from pilot import chat_with_llm_stream, get_search_results, reformulate_question,chat_with_llm_stream2,get_search_resultsAsync
@@ -179,7 +180,8 @@ with col_select:
     index_mapping = {
         "2304 SLT Alto Tirreno": "srch-index-alto-tirreno",
         "2371 STP Bay du Nord": "srch-index-bay-du-nord",
-        "2269 STP B29 Polok & Chinwol": "srch-index-polok-chinwol"
+        "2269 STP B29 Polok & Chinwol": "srch-index-polok-chinwol",
+        "test": "srch-index-test1"
     }
     selected_label = st.selectbox("Choose What Project To Search In", list(index_mapping.keys()), help="Select the project to search in")
     selected_index = index_mapping[selected_label]
@@ -249,6 +251,7 @@ else:
                 if st.button(f"{suggestion}", on_click=update_query_from_suggestion, args=(suggestion,)):
                     update_query_from_suggestion(suggestion)
     spinner_placeholder = st.empty()
+    
     answer = st.container()
     search = st.container()
     # Main search logic
@@ -299,10 +302,11 @@ else:
 
                     if(len(top_docs)>0):     
                                     with answer:
-                                        #st.markdown("---")
-                                        answer2, response_placeholder = chat_with_llm_stream(DOCSEARCH_PROMPT, llm, query, top_docs)
+                                        st.markdown("#### Answer")
+                                        st.markdown("---")
+                                        answer2=  chat_with_llm_stream(DOCSEARCH_PROMPT, llm, query, top_docs)
                                         #st.markdown(response_placeholder, unsafe_allow_html=True)
-                                        st.markdown(answer2, unsafe_allow_html=True)
+                                        #st.markdown(answer2, unsafe_allow_html=True)
 
                                         st.session_state.stored_answer = answer2
                                         st.session_state.stored_results = ordered_results
@@ -312,11 +316,10 @@ else:
                     else:
                                 answer = {"No results found" }
                     
-                    if response_placeholder:
-                            response_placeholder.empty()
+                    #if response_placeholder:
+                    #        response_placeholder.empty()
                                 
 
-                    
                     with search:
                         st.markdown("---")
                         st.markdown("#### Search Results")
