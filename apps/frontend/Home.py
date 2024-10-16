@@ -25,7 +25,7 @@ except Exception as e:
     # if not found in the current directory, try the parent directory
     import sys
     sys.path.append("../../common")
-    from pilot import (chat_with_llm_stream, get_search_results, reformulate_question,get_search_resultsAsync)
+    from pilot import (chat_with_llm_stream, get_search_results_sync, reformulate_question,get_search_results_async)
     from prompts import DOCSEARCH_PROMPT, QUESTION_GENERATOR_PROMPT
     sys.path.append("../../")
     from dotenv import load_dotenv
@@ -79,103 +79,63 @@ with st.container():
 
 # Button functions for improved clarity and code readability
 def handle_search_button():
-    # Start the search
     st.session_state['is_running'] = True
     st.session_state["submitSearch"] = True
     st.session_state["doneStreaming"] = False
 
 def handle_stop_button():
-    # Stop the search
     st.session_state['is_running'] = False
     st.session_state["submitSearch"] = False
 
 def handle_clear_button():
-    # Clear the results
     st.session_state["doneStreaming"] = False
     st.session_state["submitSearch"] = False
     st.session_state.query = ""
     st.session_state.show_results = False
 
-# Buttons display logic
-
-
-#### Session State Variables ####
+# Session State Variables
 def clear_submit():
     st.session_state["submit"] = True
 
 if "submitSearch" not in st.session_state:
     st.session_state["submitSearch"] = False
-
 if 'is_running' not in st.session_state:
     st.session_state['is_running'] = False
-
-
 if "reformulated_questions" not in st.session_state:
     st.session_state.reformulated_questions = []
-    st.session_state.show_suggestions = False 
-
-# Function to update the main query input
-def update_query_from_suggestion(suggestion):
-    st.session_state.query = suggestion
-    # Clear reformulated questions and hide suggestions
-    st.session_state.reformulated_questions = []
     st.session_state.show_suggestions = False
-
-# Function to toggle visibility of reformulated suggestions
-def toggle_suggestions():
-    st.session_state.show_suggestions = False
-
 if "query" not in st.session_state:
     st.session_state.query = ""
-
 if "doneStreaming" not in st.session_state:
     st.session_state.doneStreaming = False
-
 if "stored_answer" not in st.session_state:
     st.session_state.stored_answer = ""
-    
 if "stored_results" not in st.session_state:
     st.session_state.stored_results = []
-
 if "Error" not in st.session_state:
     st.session_state.Error = None
-    
+
 # Sidebar instructions
 with st.sidebar:
     st.markdown("# App Instructions")
     st.markdown("""
-
 ### How to Use APL Smart Search
-The APL AI Smart Search tool provides answers exclusively from the uploaded documents, not from the internet or the chatbot’s internal knowledge. If the system doesn’t find the information, it will simply say: "I don't know."
-If the top answer isn't helpful, you can explore the additional search results below for more search hits.
-                
+The APL AI Smart Search tool provides answers exclusively from the uploaded documents, not from the internet or the chatbot’s internal knowledge. 
 ### Example Questions:
-
 - Make an exhaustive requirement list on bolts.
-- Make an exhaustive requirement list on tubing.
 - What are the inspection requirements for welded joints?
 - Is there a 3.1 material certificate requirement for flexible hose end fittings?
-- How should flexible hoses be marked?
-- What bolt grade should I use for the piping system?
-- What are the warranty terms in the client contract?
-- What documents do clients request for review?
-- What does the contract say about liquidated damages?
-                
-### Feedback
-                
-Your feedback is crucial for improvement. If the search didn't find information that you later discovered was actually there, please share the search query, the search results, and the information you expected to find using the feedback button in the top right corner. This helps us make necessary improvements.
-Also, please share any success stories if this tool helped you in any way. It's the best way to demonstrate the value of investing in tools like this.
-
     """)
 
 # Main search area
-col_input, col_select, col_button = st.columns([2, 1, 0.5],vertical_alignment="bottom")
+col_input, col_select, col_button = st.columns([2, 1, 0.5], vertical_alignment="bottom")
 
-# Text input field
+def update_query():
+    st.session_state.query = st.session_state.query_input
+
 with col_input:
-    query = st.text_input("Ask A Question About Your Selected Project", value=st.session_state.query, on_change=clear_submit, help="Enter your question below")
+    query = st.text_input("Ask A Question About Your Selected Project", value=st.session_state.query, on_change=update_query, help="Enter your question below", key="query_input")
 
-# Selectbox for index selection
 with col_select:
     index_mapping = {
         "2304 SLT Alto Tirreno": "srch-index-alto-tirreno",
@@ -186,205 +146,190 @@ with col_select:
     selected_label = st.selectbox("Choose What Project To Search In", list(index_mapping.keys()), help="Select the project to search in")
     selected_index = index_mapping[selected_label]
 
-# Search button
 with col_button:
     if st.session_state['is_running']:
-        # Show Stop button when a search is running
         st.button("Stop", on_click=handle_stop_button, help="Click to stop the search", type="primary")
-
     else:
-        # Show Search button when idle
         st.button("Search", on_click=handle_search_button, help="Click to start a search", type="secondary")
 
 
-
-row1_col1, row1_col2, row1_col3 = st.columns([1, 1, 0.5], vertical_alignment="bottom")
-row2_col1, row2_col2, _ = st.columns([1, 1, 0.5], vertical_alignment="bottom")
-
-
-
-# Check required environment variables
-required_env_vars = [
-    "AZURE_SEARCH_ENDPOINT", "AZURE_SEARCH_KEY", "AZURE_OPENAI_ENDPOINT", "AZURE_OPENAI_API_KEY", "BLOB_SAS_TOKEN"
-]
-missing_env_vars = [var for var in required_env_vars if not os.environ.get(var)]
-
-if missing_env_vars:
-    st.error(f"Please set the following environment variables: {', '.join(missing_env_vars)}")
-else:
-    os.environ["OPENAI_API_VERSION"] = os.environ["AZURE_OPENAI_API_VERSION"]
-    MODEL = os.environ.get("GPT4_DEPLOYMENT_NAME")
-    llm = AzureChatOpenAI(deployment_name=MODEL, temperature=0.2, max_tokens=1000)
-
-    # Handle "Reformulate Question" button
-    with row1_col3:
-        if st.button('Reformulate Question', help="Click to reformulate the question"):
-            # Create empty context and append a placeholder document
-            empty_comtext = []
-            empty_value = {"chunk": "Empty", "score": 0.00, "location": "empty"}
-            empty_comtext.append(
-                Document(
-                    page_content=empty_value["chunk"], 
-                    metadata={"source": empty_value["location"], "score": empty_value["score"]}
-                )
+@st.fragment
+def reformulate_fragment(llm):
+    if st.button('Reformulate Question', help="Click to reformulate the question"):
+        empty_comtext = []
+        empty_value = {"chunk": "Empty", "score": 0.00, "location": "empty"}
+        empty_comtext.append(
+            Document(
+                page_content=empty_value["chunk"], 
+                metadata={"source": empty_value["location"], "score": empty_value["score"]}
             )
+        )
+        rfq = reformulate_question(llm, query, empty_comtext)
+        if rfq:
+            st.session_state.reformulated_questions = rfq
+            st.session_state.show_suggestions = True
+        else:
+            st.session_state.reformulated_questions = ["Error, try again"] * 4
+            st.session_state.show_suggestions = True
 
-            # Call the function to reformulate the question
-            rfq = reformulate_question(llm, query, empty_comtext)
-
-            # If reformulation is successful, store the reformulated questions in session state
-            if rfq:
-                st.session_state.reformulated_questions = rfq
-                st.session_state.show_suggestions = True
-            else:
-                # Handle error if the reformulation fails
-                st.session_state.reformulated_questions = ["Error, try again", "Error, try again", "Error, try again", "Error, try again"]
-                st.session_state.show_suggestions = True
-
-    # Display reformulated suggestions only if the button has been pressed
+@st.fragment
+def display_suggestions():
     if st.session_state.show_suggestions:
-        row1 = [row1_col1, row1_col2]
-        row2 = [row2_col1, row2_col2]
-        columns = row1 + row2
+        row1_col1, row1_col2 = st.columns([1, 1])
+        columns = [row1_col1, row1_col2]
         for i, suggestion in enumerate(st.session_state.reformulated_questions):
-            with columns[i]:
+            with columns[i % len(columns)]:
                 if st.button(f"{suggestion}", on_click=update_query_from_suggestion, args=(suggestion,)):
                     update_query_from_suggestion(suggestion)
-    spinner_placeholder = st.empty()
-    
-    answer = st.container()
-    search = st.container()
-    # Main search logic
+
+@st.fragment
+def search_fragment(llm, selected_index, selected_label, search_container):
     if st.session_state["submitSearch"]:
         try:
-            if not query or query.strip() == "":
+            if not st.session_state.query or st.session_state.query.strip() == "":
                 st.error("Please enter a valid question!")
-                st.session_state['is_running'] = False
-                  # Reset running state
-            else:
-                # Azure Search
-                ordered_results = {}  # Initialize ordered_results as an empty dictionary
+                st.session_state.is_running = False
+                st.write(st.session_state.is_running)  # Dynamically show that the search is not running
 
+            else:
+                ordered_results = {}
                 try:
                     k = 6
-                    st.session_state['is_running'] = True
-                    if st.session_state['is_running']:
-                        with spinner_placeholder.container():
-                            with st.spinner(f"Searching {selected_label}..."):
-                                ordered_results = get_search_results_async(query, [selected_index], k=k, reranker_threshold=1, sas_token=os.environ['BLOB_SAS_TOKEN'])
-                                st.session_state["submitSearch"] = True
-                                st.session_state["doneStreaming"] = False 
-                                answer_placeholder = st.empty()  # Placeholder for the streaming response
-                                results_placeholder = st.empty()  # Placeholder for search results
-
+                    st.session_state['is_running'] = True  # Indicate the search is running
+                    with st.spinner(f"Searching {selected_label}..."):
+                        ordered_results = get_search_results_async(st.session_state.query, [selected_index], k=k, reranker_threshold=1, sas_token=os.environ['BLOB_SAS_TOKEN'])
+                        
+                        st.session_state["submitSearch"] = True
+                        st.session_state["doneStreaming"] = False
+                        st.session_state.stored_results = ordered_results
+                        #st.write(st.session_state.stored_results)
                 except Exception as e:
                     st.error("No data returned from Azure Search. Please check the connection.")
                     st.session_state['is_running'] = False
                     st.session_state["submitSearch"] = False
                     st.session_state["doneStreaming"] = True
-                    st.session_state["Error"] = "No data returned from Azure Search. Refine search query and try again."
+                    st.session_state["Error"] = "No data returned. Refine query and try again."
                     logging.error(f"Search error: {e}")
-                    st.rerun()
-
-
-            if st.session_state['is_running'] and ordered_results:
-
-                try:
-                    top_docs = []
-                    with st.spinner("Reading the source documents to provide the best answer... ⏳"):
-                        for key, value in ordered_results.items():
-                            if not st.session_state['is_running']:  # Check for stop
-                                st.warning("Stopped processing documents.")
-                                break
-                            location = value.get("location", "")
-                            top_docs.append(Document(page_content=value.get("chunk", ""), metadata={"source": location, "score": value.get("score", 0)}))
-
-
-                    if(len(top_docs)>0):     
-                                    with answer:
-                                        st.markdown("#### Answer")
-                                        st.markdown("---")
-                                        answer2=  chat_with_llm_stream(DOCSEARCH_PROMPT, llm, query, top_docs)
-                                        #st.markdown(response_placeholder, unsafe_allow_html=True)
-                                        #st.markdown(answer2, unsafe_allow_html=True)
-
-                                        st.session_state.stored_answer = answer2
-                                        st.session_state.stored_results = ordered_results
-  # Store the answer in session state
-
-                                 
-                    else:
-                                answer = {"No results found" }
-                    
-                    #if response_placeholder:
-                    #        response_placeholder.empty()
-                                
-
-                    with search:
-                        st.markdown("---")
-                        st.markdown("#### Search Results")
-                        if top_docs:
-                            for key, value in ordered_results.items():
-                                location = value.get("location", "")
-                                title = str(value.get('title', value.get('name', 'Unnamed Document')))
-                                score = str(round(value.get('score', 0) * 100 / 4, 2))
-                                final_output = f"{location}"
-                                text = f"{value.get('name', 'Unnamed Document')} {value.get('page', '')}"
-                                st.markdown(f"**Document**: [{text}]({final_output})")
-                                st.markdown(f"**Score**: {score}%")
-                                st.markdown(value.get("caption", "No caption available"))
-                                st.markdown("---")
-
-                        
-                except Exception as e:
-                    st.error("Error processing documents.")
-                    logging.error(f"Document processing error: {e}")
-
-            logging.info(f"submitSearch: {st.session_state['submitSearch']}")
-            logging.info(f"doneStreaming: {st.session_state['doneStreaming']}")
-            logging.info(f"is_running: {st.session_state['is_running']}")
-            st.session_state["doneStreaming"] = True
-  
-
-
-
+                    st.write(f"Error during search: {st.session_state.Error}")  # Display error
         except Exception as e:
             st.error(f"An error occurred: {e}")
             logging.error(f"Unexpected error: {e}")
 
 
-        finally:
-                # Reset states after completion
-                
-                st.session_state["submitSearch"] = False
-                st.session_state["doneStreaming"] = True
-                st.session_state['is_running'] = False
-                st.rerun()
-                logging.info(f"submitSearch in finally: {st.session_state['submitSearch']}")
-                logging.info(f"doneStreaming in finally: {st.session_state['doneStreaming']}")
-                logging.info(f"is_running in finally: {st.session_state['is_running']}")
+@st.fragment
+def answer_fragment(llm,answer_container):
+    if st.session_state.stored_results and st.session_state["doneStreaming"] == False:
+        top_docs = []
+        for key, value in st.session_state.stored_results.items():
+            location = value.get("location", "")
+            top_docs.append(Document(page_content=value.get("chunk", ""), metadata={"source": location, "score": value.get("score", 0)}))
+        
+        if top_docs:
+            with st.spinner("Generating answer..."):
+                try:
+                    # Create a placeholder for the streaming content
+                    answer_placeholder = answer_container.empty()
+                    
+                    # Clear previous output
+                    answer_placeholder.empty()
 
+                    # Accumulate the result of the generator in a list
+                    streamed_answer = []
+                    
+                    def stream_output(content):
+                        # Accumulate streamed content and also display it
+                        streamed_answer.append(content)
+                        answer_placeholder.write(content)
 
-    if st.session_state.Error is not None:
-        st.error(st.session_state.Error)
+                    # Stream the response
+                    for chunk in chat_with_llm_stream(DOCSEARCH_PROMPT, llm, st.session_state.query, top_docs):
+                        stream_output(chunk)
+
+                    # Store the full answer after streaming completes
+                    st.session_state.stored_answer = ''.join(streamed_answer)  # Join the accumulated output
+                    st.session_state.doneStreaming = True
+                except Exception as e:
+                    st.error("Error generating answer.")
+                    logging.error(f"LLM error: {e}")
+
+def display_results(answer_container, search_container):
+    # We want to handle cases where both answer and results exist
     if st.session_state.stored_answer and st.session_state.stored_results is not None:
-        if st.session_state["doneStreaming"] and not st.session_state["submitSearch"]:
-            with answer:
-                st.markdown("#### Answer")
-                st.markdown("---")
-                st.markdown(st.session_state.stored_answer, unsafe_allow_html=True)
-
-            with search:
-                st.markdown("---")
-                st.markdown("#### Search Results")
-                for key, value in st.session_state.stored_results.items():
-                    location = value.get("location", "")
-                    title = str(value.get('title', value.get('name', 'Unnamed Document')))
-                    score = str(round(value.get('score', 0) * 100 / 4, 2))
-                    final_output = f"{location}"
-                    text = f"{value.get('name', 'Unnamed Document')} {value.get('page', '')}"
-                    st.markdown(f"**Document**: [{text}]({final_output})")
-                    st.markdown(f"**Score**: {score}%")
-                    st.markdown(value.get("caption", "No caption available"))
+        # If streaming is done and we are not running, or running status is True, display
+        if st.session_state["doneStreaming"] and st.session_state["is_running"]:
+            with answer_container:
+                answer_container.empty()  # Clear previous answer
+                if st.session_state.stored_answer:
+                    st.markdown("#### Answer")
                     st.markdown("---")
-                        
+                    st.markdown(st.session_state.stored_answer, unsafe_allow_html=True)
+
+            if st.session_state.stored_results:
+                with search_container:
+                    st.markdown("#### Search Results")
+                    for key, value in st.session_state.stored_results.items():
+                        location = value.get("location", "")
+                        title = str(value.get('title', value.get('name', 'Unnamed Document')))
+                        score = str(round(value.get('score', 0) * 100 / 4, 2))
+                        final_output = f"{location}"
+                        text = f"{value.get('name', 'Unnamed Document')} {value.get('page', '')}"
+                        st.markdown(f"**Document**: [{text}]({final_output})")
+                        st.markdown(f"**Score**: {score}%")
+                        st.markdown(value.get("caption", "No caption available"))
+                        st.markdown("---")
+
+            # Mark as completed, and reset flags
+            st.session_state["is_running"] = False
+            st.session_state["submitSearch"] = False
+            st.session_state["doneStreaming"] = True
+            # Trigger a rerun to ensure state updates and button resets after the display
+            st.rerun()
+
+    # Regardless, check to ensure the UI updates the button states on every run
+        elif not st.session_state["is_running"]:
+                with answer_container:
+                    answer_container.empty()  # Clear previous answer
+                    if st.session_state.stored_answer:
+                        st.markdown("#### Answer")
+                        st.markdown("---")
+                        st.markdown(st.session_state.stored_answer, unsafe_allow_html=True)
+
+                if st.session_state.stored_results:
+                    with search_container:
+                        st.markdown("#### Search Results")
+                        for key, value in st.session_state.stored_results.items():
+                            location = value.get("location", "")
+                            title = str(value.get('title', value.get('name', 'Unnamed Document')))
+                            score = str(round(value.get('score', 0) * 100 / 4, 2))
+                            final_output = f"{location}"
+                            text = f"{value.get('name', 'Unnamed Document')} {value.get('page', '')}"
+                            st.markdown(f"**Document**: [{text}]({final_output})")
+                            st.markdown(f"**Score**: {score}%")
+                            st.markdown(value.get("caption", "No caption available"))
+                            st.markdown("---")
+
+
+
+# Initialize the LLM
+# Check required environment variables
+required_env_vars = [
+    "AZURE_SEARCH_ENDPOINT", "AZURE_SEARCH_KEY", "AZURE_OPENAI_ENDPOINT", "AZURE_OPENAI_API_KEY", "BLOB_SAS_TOKEN"
+]
+missing_env_vars = [var for var in required_env_vars if not os.environ.get(var)]
+answer_container = st.container()
+search_container = st.container()
+if missing_env_vars:
+    st.error(f"Please set the following environment variables: {', '.join(missing_env_vars)}")
+else:
+    os.environ["OPENAI_API_VERSION"] = os.environ["AZURE_OPENAI_API_VERSION"]
+    MODEL = os.environ.get("GPT4_DEPLOYMENT_NAME")
+    llm = AzureChatOpenAI(deployment_name=MODEL, temperature=0.2, max_tokens=2500)
+
+    # Run fragments, passing the `llm` instance
+
+    print(selected_index, selected_label)
+    reformulate_fragment(llm)
+    display_suggestions()
+    search_fragment(llm, selected_index, selected_label,search_container)
+    answer_fragment(llm,answer_container)  # Fragment for LLM interaction and answer generation
+    display_results(answer_container,search_container)

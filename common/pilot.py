@@ -370,7 +370,7 @@ def search_documents(query, indexes, k, headers, params):
             agg_search_results[index] = resp.json()
         else:
             logging.error(f"Failed to retrieve search results for index {index}: {resp.status_code}")
-    return agg_search_results
+    return agg_search_results, index
 
 
 
@@ -395,7 +395,7 @@ def get_search_results_async(query: str, indexes: list, k: int = 5, reranker_thr
     params = {'api-version': os.environ['AZURE_SEARCH_API_VERSION']}
 
     # Step 0: Perform the search across multiple index(es)
-    agg_search_results = search_documents(query, indexes, k, headers, params)
+    agg_search_results, index = search_documents(query, indexes, k, headers, params)
 
     # Step 1: Create the mapping from location to result IDs
     mappings = create_location_to_result_map(agg_search_results[index])
@@ -653,8 +653,8 @@ def chat_with_llm_stream(pre_prompt, llm, query, context):
         | llm  
         | StrOutputParser()  
     )
-
     ans = st.write_stream(chain.stream({"question": query, "context": context}))
+
     return ans
 
 
