@@ -101,8 +101,6 @@ import urllib
 from dotenv import load_dotenv
 load_dotenv("credentials.env")
 
-
-
 import os
 import json
 import random
@@ -112,16 +110,36 @@ from collections import OrderedDict
 from typing import List
 import requests
 import streamlit as st
-
 import functools
 import logging
 import threading
+import asyncio
+import httpx
+import concurrent.futures
+import fitz  # PyMuPDF for PDF processing
+import random
+import re
+import urllib
+from io import BytesIO
+from collections import OrderedDict
+import time
+
+
+
 # Set up basic configuration for logging
-logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
+logging.basicConfig(level=logging.DEBUG, format='%(asctime)s - %(levelname)s - %(message)s')
 
 
 def debug(func):
-    """A decorator that logs the function signature and return value with a length limit"""
+    """
+    A decorator that logs the function's signature and its return value with a length limit for better readability in logs.
+
+    - func (Callable): The function being decorated.
+
+    Returns:
+    - Callable: The decorated function with logging for both the input arguments and the return value, truncated if necessary.
+    """
+
     @functools.wraps(func)
     def wrapper_debug(*args, **kwargs):
         def truncate(value, length=100):
@@ -143,35 +161,54 @@ def debug(func):
     return wrapper_debug
 
 
-import time
+
+
 
 def timer(func):
-    """A decorator that logs the runtime of the function"""
+    """
+    A decorator that logs the runtime of the function, supporting both synchronous and asynchronous functions.
+
+    - func (Callable): The function being decorated (sync or async).
+
+    Returns:
+    - Callable: The decorated function with added logging for the runtime, measured in seconds.
+    """
     @functools.wraps(func)
     def wrapper_timer(*args, **kwargs):
-        start_time = time.time()  # Start the timer
-        result = func(*args, **kwargs)
-        end_time = time.time()  # End the timer
-        runtime = end_time - start_time
-        logging.info(f"{func.__name__!r} executed in {runtime:.4f} seconds")
-        return result
+        if asyncio.iscoroutinefunction(func):  # Check if the function is asynchronous
+            async def async_wrapper_timer(*args, **kwargs):
+                start_time = time.time()  # Start the timer
+                result = await func(*args, **kwargs)  # Await the async function
+                end_time = time.time()  # End the timer
+                runtime = end_time - start_time
+                logging.info(f"{func.__name__!r} executed in {runtime:.4f} seconds (async)")
+                return result
+            return async_wrapper_timer(*args, **kwargs)
+        else:  # If the function is synchronous
+            start_time = time.time()  # Start the timer
+            result = func(*args, **kwargs)
+            end_time = time.time()  # End the timer
+            runtime = end_time - start_time
+            logging.info(f"{func.__name__!r} executed in {runtime:.4f} seconds (sync)")
+            return result
     return wrapper_timer
 
 
 
-
-import asyncio
-import httpx
-import concurrent.futures
-import fitz  # PyMuPDF for PDF processing
-import random
-import re
-import urllib
-from io import BytesIO
-from collections import OrderedDict
 @timer
 async def download_file_async(pdf_url, result_id, retries=3, delay=2):
-    """Download a file asynchronously with retry logic, keeping track of the PDF URL."""
+    """
+    Downloads a file asynchronously with retry logic, keeping track of the PDF URL.
+
+    - pdf_url (str): The URL of the PDF to download.
+    - result_id (str): An identifier for the download process (used for logging).
+    - retries (int, optional): The number of retries allowed if the download fails (default: 3).
+    - delay (int, optional): The delay between retries in seconds (default: 2).
+
+    Returns:
+    - Tuple[str, BytesIO | None]: Returns a tuple containing the PDF URL and the PDF data (BytesIO stream). If the download fails after retries, returns the URL and None.
+    """
+
     attempt = 0
     while attempt < retries:
         try:
@@ -200,7 +237,15 @@ async def download_file_async(pdf_url, result_id, retries=3, delay=2):
 
 @timer
 def create_location_to_result_map(search_results):
-    """Create a dictionary mapping PDF location to a list of result IDs."""
+    """
+    Creates a dictionary that maps PDF locations to a list of result IDs from search results.
+
+    - search_results (dict): The search results containing 'location' and 'id' fields. The 'value' field should contain the actual results.
+
+    Returns:
+    - Dict[str, List[str]]: Returns a dictionary where the keys are document locations (URLs) and the values are lists of corresponding result IDs.
+    """
+
     location_to_result_ids = {}
 
     # Extract the actual search results from the 'value' field
@@ -230,7 +275,16 @@ def create_location_to_result_map(search_results):
 
 
 def find_search_term_in_pdfAsync(pdf_stream, search_term):
-    """Search for a term in a PDF and return the page number."""
+    """
+    Searches for a specific term in a PDF and returns the page number where the term appears.
+
+    - pdf_stream (BytesIO): A PDF document stream to search through.
+    - search_term (str): The term to search for within the PDF.
+
+    Returns:
+    - List[int] | None: Returns a list with the page number (1-based) where the search term is found, or None if the term is not found.
+    """
+
     try:
         logging.info(f"Searching for term '{search_term}' in PDF.")
 
@@ -247,8 +301,19 @@ def find_search_term_in_pdfAsync(pdf_stream, search_term):
         print(f"Error processing PDF: {e}")
     return None
 
+
+
+
 async def download_all_pdfs_concurrently(document_name_to_result_ids):
-    """Download all unique PDFs concurrently and return a dictionary with document name as key and PDF stream as value."""
+    """
+    Downloads all unique PDFs concurrently and returns a dictionary of document names to PDF streams.
+
+    - document_name_to_result_ids (Dict[str, List[str]]): A dictionary mapping document names (PDF URLs) to their corresponding result IDs.
+
+    Returns:
+    - Dict[str, BytesIO]: A dictionary where keys are document names (URLs) and values are the PDF streams (BytesIO).
+    """
+
     downloaded_pdfs = {}
     
     download_tasks = []
@@ -271,16 +336,21 @@ async def download_all_pdfs_concurrently(document_name_to_result_ids):
     return downloaded_pdfs
 
 
+def search_documents(query, indexes, k, headers, params):
+    """
+    Performs a search query across multiple indexes and returns the aggregated search results.
 
+    Args:
+    - query (str): The search query to execute.
+    - indexes (list): A list of index names to search within.
+    - k (int): The number of results to retrieve for each index.
+    - headers (dict): HTTP headers containing API keys and other necessary information for the search request.
+    - params (dict): HTTP parameters, such as the API version.
 
-
-@timer
-def get_search_resultsAsync(query: str, indexes: list, k: int = 5, reranker_threshold: int = 1, use_captions: bool = True, sas_token: str = "") -> OrderedDict:
-    """Performs search and processes multiple results concurrently, ensuring consistent linking with IDs."""
-    headers = {'Content-Type': 'application/json', 'api-key': os.environ["AZURE_SEARCH_KEY"]}
-    params = {'api-version': os.environ['AZURE_SEARCH_API_VERSION']}
-
-    agg_search_results = dict()
+    Returns:
+    - dict: A dictionary where keys are index names and values are the search results for each index.
+    """
+    agg_search_results = {}
     for index in indexes:
         search_payload = {
             "search": query,
@@ -296,15 +366,36 @@ def get_search_resultsAsync(query: str, indexes: list, k: int = 5, reranker_thre
 
         resp = requests.post(os.environ['AZURE_SEARCH_ENDPOINT'] + "/indexes/" + index + "/docs/search",
                              data=json.dumps(search_payload), headers=headers, params=params)
-        
-
         if resp.status_code == 200:
-            search_results = resp.json()
-            agg_search_results[index] = search_results
+            agg_search_results[index] = resp.json()
         else:
-            print(f"Failed to retrieve search results for index {index}: {resp.status_code}")
+            logging.error(f"Failed to retrieve search results for index {index}: {resp.status_code}")
+    return agg_search_results
 
 
+
+@timer
+def get_search_results_async(query: str, indexes: list, k: int = 5, reranker_threshold: int = 1, use_captions: bool = True, sas_token: str = "") -> OrderedDict:
+    """
+    Performs a search across multiple indexes, processes the results, and links them to their corresponding IDs, while handling PDF downloads and term search.
+    Does downloading the correct pdf's asynchronously.
+
+    - query (str): The search query.
+    - indexes (list): A list of index names to search within.
+    - k (int, optional): The maximum number of results to retrieve (default: 5).
+    - reranker_threshold (int, optional): The minimum reranker score for filtering results (default: 1).
+    - use_captions (bool, optional): Flag to determine whether to use captions or highlights from search results (default: True).
+    - sas_token (str, optional): A SAS token for accessing resources (optional).
+
+    Returns:
+    - OrderedDict: An ordered dictionary of processed search results, including document locations and extracted terms with metadata.
+    """
+
+    headers = {'Content-Type': 'application/json', 'api-key': os.environ["AZURE_SEARCH_KEY"]}
+    params = {'api-version': os.environ['AZURE_SEARCH_API_VERSION']}
+
+    # Step 0: Perform the search across multiple index(es)
+    agg_search_results = search_documents(query, indexes, k, headers, params)
 
     # Step 1: Create the mapping from location to result IDs
     mappings = create_location_to_result_map(agg_search_results[index])
@@ -397,24 +488,24 @@ def get_search_resultsAsync(query: str, indexes: list, k: int = 5, reranker_thre
     return ordered_content
 
 
-
-
-def extract_filtered_groups(content_part):
-    """Extract word groups from content, filtering unwanted characters."""
-    words = content_part.split()
-    word_groups = [' '.join(words[i:i + 4]) for i in range(len(words) - 3)]
-    filtered_groups = [group for group in word_groups if not re.search(r'[^a-zA-Z0-9.,:\s]', group)]
-    return filtered_groups
-
-
-
-
-def get_search_results(query: str, indexes: list, 
+def get_search_results_sync(query: str, indexes: list, 
                        k: int = 5,
                        reranker_threshold: int = 1,
                        sas_token: str = "") -> List[dict]:
-    """Performs multi-index hybrid search and returns ordered dictionary with the combined results"""
-    
+    """
+    Performs a search across multiple indexes, processes the results, and links them to their corresponding IDs, while handling PDF downloads and term search.
+    Does NOT download the pdf's asynchronously.
+
+    - query (str): The search query.
+    - indexes (list): A list of index names to search within.
+    - k (int, optional): The maximum number of results to retrieve (default: 5).
+    - reranker_threshold (int, optional): The minimum reranker score for filtering results (default: 1).
+    - use_captions (bool, optional): Flag to determine whether to use captions or highlights from search results (default: True).
+    - sas_token (str, optional): A SAS token for accessing resources (optional).
+
+    Returns:
+    - OrderedDict: An ordered dictionary of processed search results, including document locations and extracted terms with metadata.
+    """    
 
 
     headers = {'Content-Type': 'application/json','api-key': os.environ["AZURE_SEARCH_KEY"]}
@@ -519,15 +610,21 @@ def get_search_results(query: str, indexes: list,
     
     return ordered_content
 
-# Updated get_search_results function
-
-
-
-
-
 
 
 def chat_with_llm(pre_prompt, llm, query, context):
+    """
+    Executes a language model chain that takes a pre-built prompt template, processes it through the LLM, and parses the result.
+
+    - pre_prompt (ChatPromptTemplate): The prompt template used to format the input for the LLM.
+    - llm (AzureChatOpenAI | Any LLM): The language model instance that generates the response.
+    - query (str): The user's question or input.
+    - context (str): The additional context provided from the search results from Azure Search.
+
+    Returns:
+    - str: The generated response from the language model after invoking the chain.
+    """
+
     chain = (
         pre_prompt  # Passes the 4 variables above to the prompt template
         | llm   # Passes the finished prompt to the LLM
@@ -539,100 +636,39 @@ def chat_with_llm(pre_prompt, llm, query, context):
 
 @timer
 def chat_with_llm_stream(pre_prompt, llm, query, context):
-    # Create a placeholder for streaming the response
+    """
+    Streams the repons from a language model chain that takes a pre-built prompt template, processes it through the LLM, and parses the result.
 
-    # Existing chain processing code
+    - pre_prompt (ChatPromptTemplate): The prompt template used to format the input for the LLM.
+    - llm (AzureChatOpenAI | Any LLM): The language model instance that generates the response.
+    - query (str): The user's question or input.
+    - context (str): The additional context provided from the search results from Azure Search.
 
-    # Chain processing
+    Returns:
+    - Any: Streams and returns the LLM response using Streamlit's `write_stream` function.
+    """    
+
     chain = (
-        pre_prompt  # Passes the variables to the prompt template
-        | llm  # Use streaming feature of the LLM
-        | StrOutputParser()  # Converts the output to a string
+        pre_prompt 
+        | llm  
+        | StrOutputParser()  
     )
 
-    # Stream the response by invoking the chain
     ans = st.write_stream(chain.stream({"question": query, "context": context}))
     return ans
-
-
-
-@timer
-def chat_with_llm_stream2(pre_prompt, llm, query, context, batch_size=10):
-
-    # Create a placeholder for streaming the response
-    response_placeholder = st.empty()
-
-    # Start an empty string to accumulate the answer as it streams
-    accumulated_answer = ""
-
-    # Chain processing
-    chain = (
-        pre_prompt  # Passes the variables to the prompt template
-        | llm  # Use streaming feature of the LLM
-        | StrOutputParser()  # Converts the output to a string
-    )
-
-
-    # Stream the response by invoking the chain
-    for token in chain.stream({"question": query, "context": context}):
-        accumulated_answer += token  # Accumulate the tokens
-        response_placeholder.markdown(f"#### Answer\n---\n{accumulated_answer}")  # Update the placeholder progressively
-
-    # Clear the placeholder
-    # response_placeholder.empty()
-
-    return accumulated_answer, response_placeholder
-
-
-
-@timer
-def chat_with_llm_stream3(pre_prompt, llm, query, context, batch_size=1):
-    """
-    Streams response from the LLM in batches, progressively displaying it in the UI.
-    """
-
-    # Create a placeholder for streaming the response
-    response_placeholder = st.empty()
-
-    # Use a generator to yield tokens as they are generated
-    def token_generator(chain):
-        for i, token in enumerate(chain.stream({"question": query, "context": context})):
-            yield token
-
-    # Chain processing
-    chain = (
-        pre_prompt  # Passes the variables to the prompt template
-        | llm  # Use streaming feature of the LLM
-        | StrOutputParser()  # Converts the output to a string
-    )
-
-    # Use a list to accumulate tokens (more efficient than string concatenation)
-    accumulated_answer_list = []
-    token_batch = []
-
-    # Iterate over the generator and process tokens
-    for i, token in enumerate(token_generator(chain)):
-        token_batch.append(token)
-        accumulated_answer_list.append(token)  # Append tokens to the list
-
-        # Update the UI after every batch_size tokens
-        if i % batch_size == 0:
-            response_placeholder.markdown(f"#### Answer\n---\n{''.join(accumulated_answer_list)}", unsafe_allow_html=True)
-
-
-
-    response_placeholder.markdown(f"#### Answer\n---\n{''.join(accumulated_answer_list)}", unsafe_allow_html=True)
-
-
-    # Join the accumulated tokens into a final string
-    accumulated_answer = ''.join(accumulated_answer_list)
-
-    return accumulated_answer, response_placeholder
 
 
 @functools.lru_cache(maxsize=32)
 @timer
 def download_pdf(pdf_url):
+    """
+    Downloads a PDF from a URL and returns it as a PyMuPDF document.
+
+    - pdf_url (str): The URL of the PDF to download.
+
+    Returns:
+    - fitz.Document | None: The PyMuPDF document object representing the PDF, or None if the download fails.
+    """
     response = requests.get(pdf_url)
     if response.status_code != 200:
         return None
@@ -643,6 +679,15 @@ def download_pdf(pdf_url):
 
 @timer
 def find_search_term_in_pdf_from_url(pdf_url, search_term):
+    """
+    Searches for a term within a PDF retrieved from a URL and returns the pages where the term is found.
+
+    - pdf_url (str): The URL of the PDF to search within.
+    - search_term (str): The term to search for in the PDF.
+
+    Returns:
+    - List[int] | None: A list of page numbers (1-based) where the term is found, or None if not found.
+    """
     doc = download_pdf(pdf_url)
     if doc is None:
         return None
@@ -664,6 +709,16 @@ def find_search_term_in_pdf_from_url(pdf_url, search_term):
 
 
 def reformulate_question(llm, query, context):
+    """
+    Reformulates a question into four different variations to improve search accuracy using a language model.
+
+    - llm (AzureChatOpenAI | Any LLM): The language model instance used to reformulate the query.
+    - query (str): The original query provided by the user.
+    - context (str): The context given to the LLM to assist in the reformulation process.
+
+    Returns:
+    - List[str]: A list of four reformulated versions of the original query.
+    """
     PRE_PROMPT_TEXT = '''
 Reformulate the question so it improves semantic search accuracy. Provide four different suggestions, and the answer should follow the exact format:
 [reformulated question 1], [reformulated question 2], [reformulated question 3], [reformulated question 4]. Make sure the structure matches precisely.
@@ -686,21 +741,6 @@ Reformulate the question so it improves semantic search accuracy. Provide four d
     cleaned_questions = [question.strip("[]") for question in questions_array]
 
     return cleaned_questions
-
-
-
-# Helper function to search for a term in the PDF
-@timer
-def find_search_term_in_pdf(doc, search_term):
-    pages_with_term = []
-    for page_num in range(len(doc)):
-        page = doc.load_page(page_num)
-        text = page.get_text("text")
-        if search_term.lower() in text.lower():
-            pages_with_term.append(page_num + 1)  # Store page numbers starting from 1
-    
-    return pages_with_term
-
 
 
   

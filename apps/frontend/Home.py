@@ -14,7 +14,7 @@ import time  # For simulating the progress bar
 import asyncio
 
 try:
-    from pilot import chat_with_llm_stream, get_search_results, reformulate_question,chat_with_llm_stream2,get_search_resultsAsync
+    from pilot import chat_with_llm_stream, get_search_results_sync, reformulate_question,get_search_results_async
     from prompts import DOCSEARCH_PROMPT, QUESTION_GENERATOR_PROMPT
     from dotenv import load_dotenv
     load_dotenv("credentials.env")
@@ -271,7 +271,7 @@ else:
                     if st.session_state['is_running']:
                         with spinner_placeholder.container():
                             with st.spinner(f"Searching {selected_label}..."):
-                                ordered_results = get_search_resultsAsync(query, [selected_index], k=k, reranker_threshold=1, sas_token=os.environ['BLOB_SAS_TOKEN'])
+                                ordered_results = get_search_results_async(query, [selected_index], k=k, reranker_threshold=1, sas_token=os.environ['BLOB_SAS_TOKEN'])
                                 st.session_state["submitSearch"] = True
                                 st.session_state["doneStreaming"] = False 
                                 answer_placeholder = st.empty()  # Placeholder for the streaming response
