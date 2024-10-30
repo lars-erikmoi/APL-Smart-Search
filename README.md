@@ -1,4 +1,11 @@
 ## Coming soon
+
+
+---
+## At the moment, the Infrastructure as Code (IaC) setup isn’t fully functional—specifically, creating an app-plan is presenting some issues. We’re still in the early stages of development, but IaC will be prioritized as we move into the final steps of the project.
+---
+
+
 ---
 To run the app local, you can use this:
 you have to be inside `apps/frontend`
@@ -10,7 +17,4 @@ this is currently the homepage:
 ---
 
 
----
-## IaC is currently not fully working, the making of an appplan is somehow not working.
-Also in early development
----
+
