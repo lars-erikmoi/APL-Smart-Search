@@ -196,6 +196,7 @@ def timer(func):
 
 
 @timer
+@st.cache_resource(ttl=1500,  max_entries=20, show_spinner=False)
 async def download_file_async(pdf_url, result_id, retries=3, delay=2):
     """
     Downloads a file asynchronously with retry logic, keeping track of the PDF URL.
@@ -236,6 +237,7 @@ async def download_file_async(pdf_url, result_id, retries=3, delay=2):
 
 
 @timer
+@timer
 def create_location_to_result_map(search_results):
     """
     Creates a dictionary that maps PDF locations to a list of result IDs from search results.
@@ -273,7 +275,7 @@ def create_location_to_result_map(search_results):
 
 
 
-
+@st.cache_resource(ttl=1500,  max_entries=10, show_spinner=False)
 def find_search_term_in_pdfAsync(pdf_stream, search_term):
     """
     Searches for a specific term in a PDF and returns the page number where the term appears.
@@ -300,8 +302,6 @@ def find_search_term_in_pdfAsync(pdf_stream, search_term):
     except Exception as e:
         print(f"Error processing PDF: {e}")
     return None
-
-
 
 
 async def download_all_pdfs_concurrently(document_name_to_result_ids):
@@ -335,47 +335,94 @@ async def download_all_pdfs_concurrently(document_name_to_result_ids):
     
     return downloaded_pdfs
 
+@st.cache_resource(ttl=3600,show_spinner=False)  # Cache the results for 1 hour
+def get_cached_pdf_results(document_name_to_result_ids):
+    loop = asyncio.new_event_loop()
+    asyncio.set_event_loop(loop)
+    pdf_results = loop.run_until_complete(download_all_pdfs_concurrently(document_name_to_result_ids))
+    return pdf_results
 
-def search_documents(query, indexes, k, headers, params):
+
+@st.cache_data(ttl=1500, max_entries=10, show_spinner=False)
+def get_documents(query, indexes, k, headers, params, title_prefixes=None):
     """
     Performs a search query across multiple indexes and returns the aggregated search results.
-
+    
     Args:
     - query (str): The search query to execute.
     - indexes (list): A list of index names to search within.
     - k (int): The number of results to retrieve for each index.
     - headers (dict): HTTP headers containing API keys and other necessary information for the search request.
     - params (dict): HTTP parameters, such as the API version.
-
+    - title_prefixes (list, optional): A list of document name prefixes to filter the search results (default: None).
+    
     Returns:
-    - dict: A dictionary where keys are index names and values are the search results for each index.
+    - dict: A dictionary where keys are index names and values are either the search results or an error message.
+        - results: The search results for the index.
+        - error: An error message if the search failed.
+    - str: The index name that was used for the search.
+    
     """
     agg_search_results = {}
-    for index in indexes:
-        search_payload = {
-            "search": query,
-            "select": "id, title, chunk, name, location",
-            "queryType": "semantic",
-            "vectorQueries": [{"text": query, "fields": "chunkVector", "kind": "text", "k": k}],
-            "semanticConfiguration": "my-semantic-config",
-            "captions": "extractive",
-            "answers": "extractive",
-            "count": "true",
-            "top": k    
-        }
+    index = ""
+    
+    if title_prefixes:
+        
+        # Dynamically build the filter expression using the title_prefixes array
+        filter_expression = " or ".join([f"docname eq '{title}'" for title in title_prefixes])
+        
+    try:
+        for index in indexes:  
+            if title_prefixes:
+                search_payload = {
+                    "search": query,
+                    "select": "id, title, chunk, name, location",
+                    "queryType": "semantic",
+                    "vectorQueries": [{"text": query, "fields": "chunkVector", "kind": "text", "k": k}],
+                    "semanticConfiguration": "my-semantic-config",
+                    "captions": "extractive",
+                    "answers": "extractive",
+                    "count":"true",
+                    "top": k,
+                    "filter": f"({filter_expression})"   
+                }
+            else:
+                search_payload = {
+                    "search": query,
+                    "select": "id, title, chunk, name, location",
+                    "queryType": "semantic",
+                    "vectorQueries": [{"text": query, "fields": "chunkVector", "kind": "text", "k": k}],
+                    "semanticConfiguration": "my-semantic-config",
+                    "captions": "extractive",
+                    "answers": "extractive",
+                    "count":"true",
+                    "top": k,   
+                }
 
-        resp = requests.post(os.environ['AZURE_SEARCH_ENDPOINT'] + "/indexes/" + index + "/docs/search",
-                             data=json.dumps(search_payload), headers=headers, params=params)
-        if resp.status_code == 200:
-            agg_search_results[index] = resp.json()
-        else:
-            logging.error(f"Failed to retrieve search results for index {index}: {resp.status_code}")
-    return agg_search_results, index
+                # Perform the search request
+                resp = requests.post(os.environ['AZURE_SEARCH_ENDPOINT'] + "/indexes/" + index + "/docs/search",
+                                    data=json.dumps(search_payload), headers=headers, params=params)
+                
+                if resp.status_code == 200:
+                    agg_search_results[index] = {"results": resp.json()}
+                else:
+                    error_message = f"Failed to retrieve search results for index {index} (Status Code: {resp.status_code})"
+                    agg_search_results[index] = {"error": error_message}
+                    logging.error(error_message)
+        
+    except Exception as e:
+        error_message = f"An error occurred during search in index {index}: {str(e)}"
+        agg_search_results[index] = {"error": error_message}
+        logging.exception(error_message)
+    
+    return agg_search_results,index
+
 
 
 
 @timer
-def get_search_results_async(query: str, indexes: list, k: int = 5, reranker_threshold: int = 1, use_captions: bool = True, sas_token: str = "") -> OrderedDict:
+@debug
+def get_search_results_async(query: str, indexes: list, spinner_placeholder, k: int = 5, reranker_threshold: int = 1, sas_token: str = "",title_prefixes=None) -> OrderedDict:
     """
     Performs a search across multiple indexes, processes the results, and links them to their corresponding IDs, while handling PDF downloads and term search.
     Does downloading the correct pdf's asynchronously.
@@ -384,8 +431,8 @@ def get_search_results_async(query: str, indexes: list, k: int = 5, reranker_thr
     - indexes (list): A list of index names to search within.
     - k (int, optional): The maximum number of results to retrieve (default: 5).
     - reranker_threshold (int, optional): The minimum reranker score for filtering results (default: 1).
-    - use_captions (bool, optional): Flag to determine whether to use captions or highlights from search results (default: True).
     - sas_token (str, optional): A SAS token for accessing resources (optional).
+    - title_prefixes (list, optional): A list of document name prefixes to filter the search results (default: None).
 
     Returns:
     - OrderedDict: An ordered dictionary of processed search results, including document locations and extracted terms with metadata.
@@ -395,86 +442,103 @@ def get_search_results_async(query: str, indexes: list, k: int = 5, reranker_thr
     params = {'api-version': os.environ['AZURE_SEARCH_API_VERSION']}
 
     # Step 0: Perform the search across multiple index(es)
-    agg_search_results, index = search_documents(query, indexes, k, headers, params)
+    agg_search_results, index = get_documents(query, indexes, k, headers, params, title_prefixes)
+
+
 
     # Step 1: Create the mapping from location to result IDs
-    mappings = create_location_to_result_map(agg_search_results[index])
+    print(f"Aggregated search results for index {index} with {len(agg_search_results[index]['results']['value'])} results.")
+    #use the old mappings if they exist, serves as a cache
 
-    # Step 2: Download all PDFs concurrently (each location only once)
-    downloaded_pdfs = asyncio.run(download_all_pdfs_concurrently(mappings))
+    mappings = create_location_to_result_map(agg_search_results[index]['results'])
+    # Step 2: Filter out locations already in old_mappings
+
+
+    with spinner_placeholder.container():
+        with st.spinner("Downloading PDFs..."):
+                # Download PDFs concurrently for the new locations
+            downloaded_pdfs = get_cached_pdf_results(mappings)
+
+
+# Now `old_mappings` contains both the old cached data and the newly downloaded data
+
 
     # Step 3: Process the PDFs and search for terms based on result IDs
     content = OrderedDict()
     # Iterate through the search results and handle both PDF and non-PDF files
-    for index, search_results in agg_search_results.items():
-        for result in search_results['value']:
-            result_id = result['id']
-            location = result['location']
-            file_name = result['name']
-            
-            # Check if the file is a PDF and handle accordingly
-            if file_name.endswith(".pdf") or file_name.endswith(".PDF"):
-                # Handle the downloaded PDFs
-                if location in downloaded_pdfs:
-                    pdf_stream = downloaded_pdfs[location]
-                    # Extract content to use (caption or highlights)
-                    content_to_use = (
-                        result.get('@search.captions', [{}])[0].get('highlights', "") if not use_captions
-                        else result.get('@search.captions', [{}])[0].get('text', "")
-                    )   
 
-                    if content_to_use:
-                        words = content_to_use.split()
-                        word_groups = [' '.join(words[i:i + 4]) for i in range(len(words) - 3)]
-                        filtered_groups = [group for group in word_groups if not re.search(r'[^a-zA-Z0-9.,:\s]', group)]
+    with spinner_placeholder.container():
+        with st.spinner("Processing search results..."):
+            for index, search_results in agg_search_results.items():
+                search_results = search_results['results']
 
-                        if not filtered_groups:
-                            print(f"No valid filtered groups found for result ID {result_id}. Skipping.")
-                            continue
+                for result in search_results['value']:
+                    result_id = result['id']
+                    location = result['location']
+                    file_name = result['name']
+                    
+                    # Check if the file is a PDF and handle accordingly
+                    if file_name.endswith(".pdf") or file_name.endswith(".PDF"):
+                        # Handle the downloaded PDFs
+                        if location in downloaded_pdfs:
+                            pdf_stream = downloaded_pdfs[location]
+                            # Extract content to use (caption or highlights)
+                            content_to_use = (
+                                result.get('@search.captions', [{}])[0].get('highlights', "")
+                            )   
 
-                        # Search in the PDF for the filtered group terms
-                        page_number = None
-                        for loop in range(15):
-                            search_term = random.choice(filtered_groups)
-                            page_number = find_search_term_in_pdfAsync(pdf_stream, search_term)
+                            if content_to_use:
+                                words = content_to_use.split()
+                                word_groups = [' '.join(words[i:i + 4]) for i in range(len(words) - 3)]
+                                filtered_groups = [group for group in word_groups if not re.search(r'[^a-zA-Z0-9.,:\s]', group)]
 
-                            if page_number:
-                                break
+                                if not filtered_groups:
+                                    print(f"No valid filtered groups found for result ID {result_id}. Skipping.")
+                                    continue
 
-                        if page_number is None:
-                            page_number = 1  # Default to page 1 if no page is found
+                                # Search in the PDF for the filtered group terms
+                                page_number = None
+                                for loop in range(15):
+                                    search_term = random.choice(filtered_groups)
+                                    page_number = find_search_term_in_pdfAsync(pdf_stream, search_term)
 
-                        # Construct the page URL if the search term is found
-                        page_url = f"#page={page_number[0]}" if isinstance(page_number, list) else f"#page={page_number}"
-                        complete_location = f"{location}{page_url}"
+                                    if page_number:
+                                        break
 
-                        # Add the result to content with cross-referenced metadata
+                                if page_number is None:
+                                    page_number = 1  # Default to page 1 if no page is found
+
+                                # Construct the page URL if the search term is found
+                                page_url = f"#page={page_number[0]}" if isinstance(page_number, list) else f"#page={page_number}"
+                                complete_location = f"{location}{page_url}"
+                                context = f"The text below is from {file_name}, located at {complete_location}. The text is extracted from the document for context. The chosen chunk is gather from Term Frequency-Inverse Document Frequency concept and embeddings. The chunk is: {result['chunk']}"                                    
+                                # Add the result to content with cross-referenced metadata
+                                content[result_id] = {
+                                    "title": result['title'],
+                                    "name": result['name'],
+                                    "chunk": context,
+                                    "location": complete_location,
+                                    "caption": content_to_use,
+                                    "score": result['@search.rerankerScore'],
+                                    "index": result.get('index'),
+                                    "page": page_url
+                                }
+
+                    # Handle non-PDF files (skip download but still include them in the results)
+                    elif file_name.endswith(".xlsx") or file_name.endswith(".xls") or file_name.endswith(".csv") or file_name.endswith(".docx"):
+                        print(f"Skipping download for non-PDF file: {file_name}")
+                        
+                        # Add the non-PDF file to the results with default page info
                         content[result_id] = {
                             "title": result['title'],
                             "name": result['name'],
                             "chunk": result['chunk'],
-                            "location": complete_location,
-                            "caption": content_to_use,
+                            "location": location,
+                            "caption": result.get('@search.captions', [{}])[0].get('text', ""),
                             "score": result['@search.rerankerScore'],
                             "index": result.get('index'),
-                            "page": page_url
+                            "page": ""  # No page number for non-PDF files
                         }
-
-            # Handle non-PDF files (skip download but still include them in the results)
-            elif file_name.endswith(".xlsx") or file_name.endswith(".xls") or file_name.endswith(".csv") or file_name.endswith(".docx"):
-                print(f"Skipping download for non-PDF file: {file_name}")
-                
-                # Add the non-PDF file to the results with default page info
-                content[result_id] = {
-                    "title": result['title'],
-                    "name": result['name'],
-                    "chunk": result['chunk'],
-                    "location": location,
-                    "caption": result.get('@search.captions', [{}])[0].get('text', ""),
-                    "score": result['@search.rerankerScore'],
-                    "index": result.get('index'),
-                    "page": ""  # No page number for non-PDF files
-                }
 
     print(f"Processed {len(content)} results with search terms found.")
     
@@ -491,7 +555,7 @@ def get_search_results_async(query: str, indexes: list, k: int = 5, reranker_thr
 def get_search_results_sync(query: str, indexes: list, 
                        k: int = 5,
                        reranker_threshold: int = 1,
-                       sas_token: str = "") -> List[dict]:
+                       sas_token: str = "", mappings=None) -> List[dict]:
     """
     Performs a search across multiple indexes, processes the results, and links them to their corresponding IDs, while handling PDF downloads and term search.
     Does NOT download the pdf's asynchronously.
@@ -612,30 +676,78 @@ def get_search_results_sync(query: str, indexes: list,
 
 
 
+
+# Define functions to calculate log probabilities and find the best completion
+def calculate_average_logprob(logprobs):
+    """
+    Calculate the average log probability for a given list of logprobs in the 'content' key.
+    
+    Args:
+    - logprobs: A dictionary with a 'content' key containing log probability dictionaries for each token.
+
+    Returns:
+    - float: The average log probability for the tokens, or -inf if logprobs is unavailable.
+    """
+    # Ensure 'content' exists and contains the logprobs list
+    if not logprobs or 'content' not in logprobs or not logprobs['content']:
+        return float('-inf')
+    
+    # Extract logprob values from each token entry in 'content'
+    try:
+        logprob_values = [token.get("logprob", 0) for token in logprobs['content']]
+        avg_logprob = sum(logprob_values) / len(logprob_values) if logprob_values else float('-inf')
+    except (TypeError, KeyError) as e:
+        print(f"Error extracting logprobs: {e}")
+        avg_logprob = float('-inf')
+    
+    return avg_logprob
+
+
+def find_best_completion(completions):
+    """
+    Finds the best completion based on the highest average log probability.
+    """
+    best_avg_logprob = float('-inf')
+    best_completion = None
+    for parsed_content, avg_logprob in completions:
+        if avg_logprob > best_avg_logprob:
+            best_avg_logprob = avg_logprob
+            best_completion = parsed_content
+    return best_completion
+
 def chat_with_llm(pre_prompt, llm, query, context):
     """
     Executes a language model chain that takes a pre-built prompt template, processes it through the LLM, and parses the result.
-
+    
     - pre_prompt (ChatPromptTemplate): The prompt template used to format the input for the LLM.
     - llm (AzureChatOpenAI | Any LLM): The language model instance that generates the response.
     - query (str): The user's question or input.
     - context (str): The additional context provided from the search results from Azure Search.
 
     Returns:
-    - str: The generated response from the language model after invoking the chain.
+    - str: The parsed response from the language model.
+    - logprobs: Log probability information for each token in the response.
     """
+    
+    # Build the chain without StrOutputParser to retain access to metadata
+    chain = pre_prompt | llm
 
-    chain = (
-        pre_prompt  # Passes the 4 variables above to the prompt template
-        | llm   # Passes the finished prompt to the LLM
-        | StrOutputParser()  # converts the output (Runnable object) to the desired output (string)
-    )
+    # Invoke the model with the query and context
+    response = chain.invoke({"question": query, "context": context})
 
-    answer = chain.invoke({"question": query, "context":context})
-    return answer
+    # Manually parse the content with StrOutputParser
+    parser = StrOutputParser()
+    parsed_content = parser.parse(response.content)
+
+    # Retrieve the logprobs from response metadata, if available
+    logprobs = response.response_metadata.get("logprobs", None)
+    avg_logprob = calculate_average_logprob(logprobs)
+
+    
+    return parsed_content, avg_logprob
 
 @timer
-def chat_with_llm_stream(pre_prompt, llm, query, context):
+def chat_with_llm_stream(pre_prompt, llm, query, context,container):
     """
     Streams the repons from a language model chain that takes a pre-built prompt template, processes it through the LLM, and parses the result.
 
@@ -653,10 +765,75 @@ def chat_with_llm_stream(pre_prompt, llm, query, context):
         | llm  
         | StrOutputParser()  
     )
-    ans = st.write_stream(chain.stream({"question": query, "context": context}))
+    with container:
+        ans = st.write_stream(chain.stream({"question": query, "context": context}))
 
     return ans
 
+def chat_chain_with_llm2(pre_prompt, llm, query, context, n, container):
+    PRE_PROMPT_TEXT = '''
+    and Use the following previous ChatGPT responses to determine the correct answer to the questions. 
+    Make sure to respond in the same manner as I previously outlined.
+    
+    Previous ChatGPT responses:
+    '''
+    chat_variables = {}  # Create a dictionary to store the variables
+
+    for i in range(1,  n + 1):
+        chat_variables[f'chat{i}'] = f'chat{i} = {chat_with_llm(pre_prompt, llm, query, context)}'  # Assign values
+
+    pre_prompt_chain = pre_prompt + PRE_PROMPT_TEXT 
+    # Now you can access the variables like this:
+    for var_name, value in chat_variables.items():
+        pre_prompt_chain + str(value)
+        
+
+    ans = chat_with_llm_stream(pre_prompt_chain, llm, query, context,container)
+    return ans
+
+
+def chat_chain_with_llm(pre_prompt, llm, query, context, n, container, spinner_placeholder):
+
+    PRE_PROMPT_TEXT = '''
+    and Use the following previous ChatGPT responses to determine the correct answer to the questions. 
+    Make sure to respond in the same manner as I previously outlined.
+    
+    Previous ChatGPT responses:
+    '''
+    chat_variables = {}  # Create a dictionary to store the variables
+    completions = []
+
+    # Generate `n` completions and store their parsed content and average log probabilities
+    with spinner_placeholder.container():
+        with st.spinner("Generating completions..."):
+                for i in range(1, n + 1):
+                    parsed_content, avg_logprob = chat_with_llm(pre_prompt, llm, query, context)
+                    completions.append((parsed_content, avg_logprob))
+                    chat_variables[f'chat{i}'] = parsed_content
+
+    with spinner_placeholder.container():
+        with st.spinner("Finding best completion..."):
+            best_completion = find_best_completion(completions)
+
+        pre_prompt_chain = pre_prompt + PRE_PROMPT_TEXT 
+        # Now you can access the variables like this:
+        for var_name, value in chat_variables.items():
+            pre_prompt_chain + str(value)
+    
+
+
+    print(f"Based on the avg logprob over the completion this is the best completion: {best_completion}")
+    pre_prompt_chain + " based on the avg logprob over the completion this is the best completion " + best_completion
+
+    # Final step: Generate the final answer using chat_with_llm_stream
+    with spinner_placeholder.container():
+        with st.spinner("Generating final answer..."):
+            ans = chat_with_llm_stream(pre_prompt_chain, llm, query, context, container)
+
+    return ans
+
+
+ 
 
 @functools.lru_cache(maxsize=32)
 @timer
@@ -744,5 +921,38 @@ Reformulate the question so it improves semantic search accuracy. Provide four d
 
 
   
+from azure.storage.blob import BlobServiceClient
 
+def get_doc_from_blob(blob_c_name):
+    # env_path = os.path.expanduser('~/cloudfiles/code/GPT-Azure-Search-Engine/credentials.env')
+    # load_dotenv(env_path)
+    load_dotenv("credentials.env")
+
+    # Replace with your connection string and container name
+    connection_string = os.getenv("BLOB_CONNECTION_STRING")
+    container_name = blob_c_name
+   
+    
+
+    # Create a BlobServiceClient object to interact with the blob service
+    blob_service_client = BlobServiceClient.from_connection_string(connection_string)
+
+    # Create a ContainerClient object to interact with the specific container
+    container_client = blob_service_client.get_container_client(container_name)
+
+    # List the blobs in the container
+    blob_list = container_client.list_blobs()
+
+    # Collect blob names in a list
+    blob_names = []
+    for blob in blob_list:
+        blob_names.append(blob.name)
+        
+        
+    # Check if any blobs were found and print a message
+    if not blob_names:
+        print("No blobs found in the container.")
+
+    # Return the list of blob names
+    return blob_names
 

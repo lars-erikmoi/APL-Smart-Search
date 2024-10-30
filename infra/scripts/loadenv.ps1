@@ -1,26 +1,28 @@
-Write-Host "Loading azd .env file from current environment"
-foreach ($line in (& azd env get-values)) {
-    if ($line -match "([^=]+)=(.*)") {
-        $key = $matches[1]
-        $value = $matches[2] -replace '^"|"$'
-	    [Environment]::SetEnvironmentVariable($key, $value)
-    }
+Write-Host "Setting up your Azure environment configuration..."
+
+# Retrieve Subscription ID and Name dynamically, with user confirmation
+$subscriptionDetails = az account show --query "{id:id, name:name}" -o json | ConvertFrom-Json
+$subscriptionId = $subscriptionDetails.id
+$subscriptionName = $subscriptionDetails.name
+
+Write-Host "Detected Subscription: $subscriptionName (ID: $subscriptionId)"
+$confirmSubscription = Read-Host "Would you like to use this subscription? (Y/N)"
+if ($confirmSubscription -eq "N") {
+    $subscriptionId = Read-Host "Please enter the Subscription ID you'd like to use"
+    $subscriptionName = Read-Host "Please enter the Subscription Name for reference"
 }
+[Environment]::SetEnvironmentVariable("AZURE_SUBSCRIPTION_ID", $subscriptionId)
+[Environment]::SetEnvironmentVariable("AZURE_SUBSCRIPTION_NAME", $subscriptionName)
+Write-Host "Subscription set to: $subscriptionName (ID: $subscriptionId)"
 
-$pythonCmd = Get-Command python -ErrorAction SilentlyContinue
-if (-not $pythonCmd) {
-  # fallback to python3 if python not found
-  $pythonCmd = Get-Command python3 -ErrorAction SilentlyContinue
-}
+# Prompt for Resource Group name if not set
+$resourceGroup = Read-Host "Enter the name of your Resource Group"
+[Environment]::SetEnvironmentVariable("AZURE_RESOURCE_GROUP", $resourceGroup)
+Write-Host "Resource Group set to: $resourceGroup"
 
-# Write-Host 'Creating python virtual environment "scripts/.venv"'
-# Start-Process -FilePath ($pythonCmd).Source -ArgumentList "-m venv ./scripts/.venv" -Wait -NoNewWindow
+# Prompt for Location (Region)
+$location = Read-Host "Enter the location (e.g., eastus, westeurope) for your resources"
+[Environment]::SetEnvironmentVariable("AZURE_LOCATION", $location)
+Write-Host "Location set to: $location"
 
-# $venvPythonPath = "./scripts/.venv/scripts/python.exe"
-# if (Test-Path -Path "/usr") {
-#   # fallback to Linux venv path
-#   $venvPythonPath = "./scripts/.venv/bin/python"
-# }
-
-# Write-Host 'Installing dependencies from "requirements.txt" into virtual environment'
-# Start-Process -FilePath $venvPythonPath -ArgumentList "-m pip install -r scripts/requirements.txt" -Wait -NoNewWindow
+Write-Host "Azure environment variables have been configured successfully."

@@ -1,0 +1,697 @@
+{
+  "$schema": "https://schema.management.azure.com/schemas/2018-05-01/subscriptionDeploymentTemplate.json#",
+  "contentVersion": "1.0.0.0",
+  "metadata": {
+    "_generator": {
+      "name": "bicep",
+      "version": "0.30.23.60470",
+      "templateHash": "8521649798705409"
+    }
+  },
+  "parameters": {
+    "environmentName": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 64,
+      "metadata": {
+        "description": "Name of the environment used to generate a short unique hash for resources."
+      }
+    },
+    "location": {
+      "type": "string",
+      "metadata": {
+        "azd": {
+          "type": "location"
+        },
+        "description": "Primary location for all resources"
+      },
+      "minLength": 1
+    },
+    "resourceGroupName": {
+      "type": "string",
+      "metadata": {
+        "description": "The name of an existing resource group where all resources will be deployed."
+      }
+    },
+    "openAiServiceName": {
+      "type": "string",
+      "defaultValue": "[format('openai-{0}', uniqueString(parameters('environmentName'), subscription().id))]"
+    },
+    "openAiSkuName": {
+      "type": "string",
+      "defaultValue": "S0"
+    },
+    "openAiHost": {
+      "type": "string",
+      "defaultValue": "azure"
+    }
+  },
+  "variables": {
+    "resourceToken": "[toLower(uniqueString(subscription().id, parameters('environmentName'), parameters('location')))]"
+  },
+  "resources": [
+    {
+      "condition": "[equals(parameters('openAiHost'), 'azure')]",
+      "type": "Microsoft.Resources/deployments",
+      "apiVersion": "2022-09-01",
+      "name": "openai",
+      "resourceGroup": "[parameters('resourceGroupName')]",
+      "properties": {
+        "expressionEvaluationOptions": {
+          "scope": "inner"
+        },
+        "mode": "Incremental",
+        "parameters": {
+          "name": {
+            "value": "[parameters('openAiServiceName')]"
+          },
+          "location": {
+            "value": "[parameters('location')]"
+          },
+          "tags": {
+            "value": {
+              "az-env-name": "[parameters('environmentName')]",
+              "cost-center": "073119414700",
+              "segment": "ee",
+              "environment": "test"
+            }
+          },
+          "sku": {
+            "value": {
+              "name": "[parameters('openAiSkuName')]"
+            }
+          },
+          "deployments": {
+            "value": [
+              {
+                "name": "[format('chatgpt-{0}', variables('resourceToken'))]",
+                "model": {
+                  "format": "OpenAI",
+                  "name": "gpt-4o"
+                },
+                "sku": {
+                  "name": "Standard",
+                  "capacity": 20
+                }
+              },
+              {
+                "name": "[format('embedding-{0}', variables('resourceToken'))]",
+                "model": {
+                  "format": "OpenAI",
+                  "name": "text-embedding-3-large"
+                },
+                "sku": {
+                  "name": "Standard",
+                  "capacity": 30
+                }
+              }
+            ]
+          }
+        },
+        "template": {
+          "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentTemplate.json#",
+          "contentVersion": "1.0.0.0",
+          "metadata": {
+            "_generator": {
+              "name": "bicep",
+              "version": "0.30.23.60470",
+              "templateHash": "11066916275911001792"
+            },
+            "description": "Creates an Azure Cognitive Services instance."
+          },
+          "parameters": {
+            "name": {
+              "type": "string"
+            },
+            "location": {
+              "type": "string",
+              "defaultValue": "[resourceGroup().location]"
+            },
+            "tags": {
+              "type": "object",
+              "defaultValue": {}
+            },
+            "customSubDomainName": {
+              "type": "string",
+              "defaultValue": "[parameters('name')]",
+              "metadata": {
+                "description": "The custom subdomain name used to access the API. Defaults to the value of the name parameter."
+              }
+            },
+            "deployments": {
+              "type": "array",
+              "defaultValue": []
+            },
+            "kind": {
+              "type": "string",
+              "defaultValue": "OpenAI"
+            },
+            "publicNetworkAccess": {
+              "type": "string",
+              "defaultValue": "Enabled"
+            },
+            "sku": {
+              "type": "object",
+              "defaultValue": {
+                "name": "S0"
+              }
+            }
+          },
+          "resources": [
+            {
+              "type": "Microsoft.CognitiveServices/accounts",
+              "apiVersion": "2023-05-01",
+              "name": "[parameters('name')]",
+              "location": "[parameters('location')]",
+              "tags": "[parameters('tags')]",
+              "kind": "[parameters('kind')]",
+              "properties": {
+                "customSubDomainName": "[parameters('customSubDomainName')]",
+                "publicNetworkAccess": "[parameters('publicNetworkAccess')]"
+              },
+              "sku": "[parameters('sku')]"
+            },
+            {
+              "copy": {
+                "name": "deployment",
+                "count": "[length(parameters('deployments'))]",
+                "mode": "serial",
+                "batchSize": 1
+              },
+              "type": "Microsoft.CognitiveServices/accounts/deployments",
+              "apiVersion": "2023-05-01",
+              "name": "[format('{0}/{1}', parameters('name'), parameters('deployments')[copyIndex()].name)]",
+              "properties": {
+                "model": "[parameters('deployments')[copyIndex()].model]",
+                "raiPolicyName": "[if(contains(parameters('deployments')[copyIndex()], 'raiPolicyName'), parameters('deployments')[copyIndex()].raiPolicyName, null())]"
+              },
+              "sku": "[if(contains(parameters('deployments')[copyIndex()], 'sku'), parameters('deployments')[copyIndex()].sku, createObject('name', 'Standard', 'capacity', 20))]",
+              "dependsOn": [
+                "[resourceId('Microsoft.CognitiveServices/accounts', parameters('name'))]"
+              ]
+            }
+          ],
+          "outputs": {
+            "endpoint": {
+              "type": "string",
+              "value": "[reference(resourceId('Microsoft.CognitiveServices/accounts', parameters('name')), '2023-05-01').endpoint]"
+            },
+            "id": {
+              "type": "string",
+              "value": "[resourceId('Microsoft.CognitiveServices/accounts', parameters('name'))]"
+            },
+            "name": {
+              "type": "string",
+              "value": "[parameters('name')]"
+            },
+            "key": {
+              "type": "string",
+              "value": "[listKeys(resourceId('Microsoft.CognitiveServices/accounts', parameters('name')), '2023-05-01').key1]"
+            }
+          }
+        }
+      }
+    },
+    {
+      "type": "Microsoft.Resources/deployments",
+      "apiVersion": "2022-09-01",
+      "name": "infra",
+      "resourceGroup": "[parameters('resourceGroupName')]",
+      "properties": {
+        "expressionEvaluationOptions": {
+          "scope": "inner"
+        },
+        "mode": "Incremental",
+        "parameters": {
+          "location": {
+            "value": "[parameters('location')]"
+          },
+          "azureSearchName": {
+            "value": "[format('search-{0}', variables('resourceToken'))]"
+          },
+          "cognitiveServiceName": {
+            "value": "[format('cognitive-service-{0}', variables('resourceToken'))]"
+          },
+          "blobStorageAccountName": {
+            "value": "[format('blobstorage{0}', variables('resourceToken'))]"
+          }
+        },
+        "template": {
+          "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentTemplate.json#",
+          "contentVersion": "1.0.0.0",
+          "metadata": {
+            "_generator": {
+              "name": "bicep",
+              "version": "0.30.23.60470",
+              "templateHash": "2506475642716025442"
+            }
+          },
+          "parameters": {
+            "azureSearchName": {
+              "type": "string",
+              "defaultValue": "[format('cog-search-{0}', uniqueString(resourceGroup().id))]",
+              "minLength": 2,
+              "maxLength": 60,
+              "metadata": {
+                "description": "Optional. Service name must only contain lowercase letters, digits or dashes, cannot use dash as the first two or last one characters, cannot contain consecutive dashes, and is limited between 2 and 60 characters in length."
+              }
+            },
+            "azureSearchSKU": {
+              "type": "string",
+              "defaultValue": "standard",
+              "allowedValues": [
+                "free",
+                "basic",
+                "standard",
+                "standard2",
+                "standard3",
+                "storage_optimized_l1",
+                "storage_optimized_l2"
+              ],
+              "metadata": {
+                "description": "Optional, defaults to standard. The pricing tier of the search service you want to create (for example, basic or standard)."
+              }
+            },
+            "azureSearchReplicaCount": {
+              "type": "int",
+              "defaultValue": 1,
+              "minValue": 1,
+              "maxValue": 12,
+              "metadata": {
+                "description": "Optional, defaults to 1. Replicas distribute search workloads across the service. You need at least two replicas to support high availability of query workloads (not applicable to the free tier). Must be between 1 and 12."
+              }
+            },
+            "azureSearchPartitionCount": {
+              "type": "int",
+              "defaultValue": 1,
+              "allowedValues": [
+                1,
+                2,
+                3,
+                4,
+                6,
+                12
+              ],
+              "metadata": {
+                "description": "Optional, defaults to 1. Partitions allow for scaling of document count as well as faster indexing by sharding your index over multiple search units. Allowed values: 1, 2, 3, 4, 6, 12."
+              }
+            },
+            "azureSearchHostingMode": {
+              "type": "string",
+              "defaultValue": "default",
+              "allowedValues": [
+                "default",
+                "highDensity"
+              ],
+              "metadata": {
+                "description": "Optional, defaults to default. Applicable only for SKUs set to standard3. You can set this property to enable a single, high density partition that allows up to 1000 indexes, which is much higher than the maximum indexes allowed for any other SKU."
+              }
+            },
+            "cognitiveServiceName": {
+              "type": "string",
+              "defaultValue": "[format('cognitive-service-{0}', uniqueString(resourceGroup().id))]",
+              "metadata": {
+                "description": "Optional. The name of our application. It has to be unique. Type a name followed by your resource group name. (<name>-<resourceGroupName>)"
+              }
+            },
+            "blobStorageAccountName": {
+              "type": "string",
+              "defaultValue": "[format('blobstorage{0}', uniqueString(resourceGroup().id))]",
+              "metadata": {
+                "description": "Optional. The name of the Blob Storage account"
+              }
+            },
+            "location": {
+              "type": "string",
+              "defaultValue": "[resourceGroup().location]",
+              "metadata": {
+                "description": "Optional, defaults to resource group location. The location of the resources."
+              }
+            }
+          },
+          "variables": {
+            "cognitiveServiceSKU": "S0"
+          },
+          "resources": [
+            {
+              "type": "Microsoft.Search/searchServices",
+              "apiVersion": "2024-03-01-preview",
+              "name": "[parameters('azureSearchName')]",
+              "location": "[parameters('location')]",
+              "sku": {
+                "name": "[parameters('azureSearchSKU')]"
+              },
+              "properties": {
+                "replicaCount": "[parameters('azureSearchReplicaCount')]",
+                "partitionCount": "[parameters('azureSearchPartitionCount')]",
+                "hostingMode": "[parameters('azureSearchHostingMode')]",
+                "semanticSearch": "standard"
+              }
+            },
+            {
+              "type": "Microsoft.CognitiveServices/accounts",
+              "apiVersion": "2023-05-01",
+              "name": "[parameters('cognitiveServiceName')]",
+              "location": "[parameters('location')]",
+              "sku": {
+                "name": "[variables('cognitiveServiceSKU')]"
+              },
+              "kind": "CognitiveServices",
+              "properties": {
+                "apiProperties": {
+                  "statisticsEnabled": false
+                }
+              }
+            },
+            {
+              "type": "Microsoft.Storage/storageAccounts",
+              "apiVersion": "2023-01-01",
+              "name": "[parameters('blobStorageAccountName')]",
+              "location": "[parameters('location')]",
+              "kind": "StorageV2",
+              "sku": {
+                "name": "Standard_LRS"
+              },
+              "properties": {
+                "supportsHttpsTrafficOnly": true
+              }
+            },
+            {
+              "type": "Microsoft.Storage/storageAccounts/blobServices",
+              "apiVersion": "2023-01-01",
+              "name": "[format('{0}/{1}', parameters('blobStorageAccountName'), 'default')]",
+              "dependsOn": [
+                "[resourceId('Microsoft.Storage/storageAccounts', parameters('blobStorageAccountName'))]"
+              ]
+            },
+            {
+              "copy": {
+                "name": "blobStorageContainer",
+                "count": "[length(createArray('books', 'cord19', 'mixed'))]"
+              },
+              "type": "Microsoft.Storage/storageAccounts/blobServices/containers",
+              "apiVersion": "2023-01-01",
+              "name": "[format('{0}/{1}/{2}', parameters('blobStorageAccountName'), 'default', createArray('books', 'cord19', 'mixed')[copyIndex()])]",
+              "properties": {
+                "publicAccess": "None"
+              },
+              "dependsOn": [
+                "[resourceId('Microsoft.Storage/storageAccounts/blobServices', parameters('blobStorageAccountName'), 'default')]"
+              ]
+            }
+          ],
+          "outputs": {
+            "azureSearchName": {
+              "type": "string",
+              "value": "[parameters('azureSearchName')]"
+            },
+            "azureSearchEndpoint": {
+              "type": "string",
+              "value": "[format('https://{0}.search.windows.net', parameters('azureSearchName'))]"
+            },
+            "blobStorageAccountName": {
+              "type": "string",
+              "value": "[parameters('blobStorageAccountName')]"
+            },
+            "azureSearchKey": {
+              "type": "string",
+              "value": "[listAdminKeys(resourceId('Microsoft.Search/searchServices', parameters('azureSearchName')), '2024-03-01-preview').primaryKey]"
+            },
+            "cognitiveServiceName": {
+              "type": "string",
+              "value": "[parameters('cognitiveServiceName')]"
+            },
+            "cognitiveServiceKey": {
+              "type": "string",
+              "value": "[listKeys(resourceId('Microsoft.CognitiveServices/accounts', parameters('cognitiveServiceName')), '2023-05-01').key1]"
+            },
+            "blobConnectionString": {
+              "type": "string",
+              "value": "[format('DefaultEndpointsProtocol=https;AccountName={0};AccountKey={1};EndpointSuffix=core.windows.net', parameters('blobStorageAccountName'), string(listKeys(resourceId('Microsoft.Storage/storageAccounts', parameters('blobStorageAccountName')), '2023-01-01').keys[0].value))]"
+            }
+          }
+        }
+      },
+      "dependsOn": [
+        "[extensionResourceId(format('/subscriptions/{0}/resourceGroups/{1}', subscription().subscriptionId, parameters('resourceGroupName')), 'Microsoft.Resources/deployments', 'openai')]"
+      ]
+    },
+    {
+      "type": "Microsoft.Resources/deployments",
+      "apiVersion": "2022-09-01",
+      "name": "frontend",
+      "resourceGroup": "[parameters('resourceGroupName')]",
+      "properties": {
+        "expressionEvaluationOptions": {
+          "scope": "inner"
+        },
+        "mode": "Incremental",
+        "parameters": {
+          "appServicePlanSKU": {
+            "value": "S3"
+          },
+          "location": {
+            "value": "[parameters('location')]"
+          },
+          "azureOpenAIName": {
+            "value": "[reference(extensionResourceId(format('/subscriptions/{0}/resourceGroups/{1}', subscription().subscriptionId, parameters('resourceGroupName')), 'Microsoft.Resources/deployments', 'openai'), '2022-09-01').outputs.name.value]"
+          },
+          "azureOpenAIAPIKey": {
+            "value": "[reference(extensionResourceId(format('/subscriptions/{0}/resourceGroups/{1}', subscription().subscriptionId, parameters('resourceGroupName')), 'Microsoft.Resources/deployments', 'openai'), '2022-09-01').outputs.key.value]"
+          },
+          "azureOpenAIModelName": {
+            "value": "gpt-4o"
+          },
+          "azureOpenAIAPIVersion": {
+            "value": "2024-05-13"
+          },
+          "azureSearchName": {
+            "value": "[reference(extensionResourceId(format('/subscriptions/{0}/resourceGroups/{1}', subscription().subscriptionId, parameters('resourceGroupName')), 'Microsoft.Resources/deployments', 'infra'), '2022-09-01').outputs.azureSearchName.value]"
+          },
+          "blobSASToken": {
+            "value": ""
+          }
+        },
+        "template": {
+          "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentTemplate.json#",
+          "contentVersion": "1.0.0.0",
+          "metadata": {
+            "_generator": {
+              "name": "bicep",
+              "version": "0.30.23.60470",
+              "templateHash": "9629662196717389892"
+            }
+          },
+          "parameters": {
+            "webAppName": {
+              "type": "string",
+              "defaultValue": "[format('webApp-Frontend-{0}', uniqueString(resourceGroup().id))]",
+              "minLength": 2,
+              "maxLength": 60,
+              "metadata": {
+                "description": "Optional. Web app name must be between 2 and 60 characters."
+              }
+            },
+            "appServicePlanSKU": {
+              "type": "string",
+              "defaultValue": "S3",
+              "allowedValues": [
+                "B3",
+                "S3",
+                "P2v3"
+              ],
+              "metadata": {
+                "description": "Optional, defaults to S3. The SKU of App Service Plan. The allowed values are B3, S3 and P2v3."
+              }
+            },
+            "appServicePlanName": {
+              "type": "string",
+              "defaultValue": "[format('AppServicePlan-Frontend-{0}', uniqueString(resourceGroup().id))]",
+              "metadata": {
+                "description": "Optional. The name of the App Service Plan."
+              }
+            },
+            "blobSASToken": {
+              "type": "securestring",
+              "metadata": {
+                "description": "Required. The SAS token for the Azure Storage Account hosting your data"
+              }
+            },
+            "resourceGroupSearch": {
+              "type": "string",
+              "defaultValue": "[resourceGroup().name]",
+              "metadata": {
+                "description": "Optional. The name of the resource group where the resources (Azure Search etc.) where deployed previously. Defaults to current resource group."
+              }
+            },
+            "azureSearchName": {
+              "type": "string",
+              "metadata": {
+                "description": "Required. The name of the Azure Search service deployed previously."
+              }
+            },
+            "azureSearchAPIVersion": {
+              "type": "string",
+              "defaultValue": "2023-10-01-preview",
+              "metadata": {
+                "description": "Optional. The API version of the Azure Search."
+              }
+            },
+            "azureOpenAIName": {
+              "type": "string",
+              "metadata": {
+                "description": "Required. The name of the Azure OpenAI resource deployed previously."
+              }
+            },
+            "azureOpenAIAPIKey": {
+              "type": "securestring",
+              "metadata": {
+                "description": "Required. The API key of the Azure OpenAI resource deployed previously."
+              }
+            },
+            "azureOpenAIModelName": {
+              "type": "string",
+              "defaultValue": "gpt-4o",
+              "metadata": {
+                "description": "Optional. The model name of the Azure OpenAI."
+              }
+            },
+            "azureOpenAIAPIVersion": {
+              "type": "string",
+              "defaultValue": "2024-05-01-preview",
+              "metadata": {
+                "description": "Optional. The API version of the Azure OpenAI."
+              }
+            },
+            "location": {
+              "type": "string",
+              "defaultValue": "[resourceGroup().location]",
+              "metadata": {
+                "description": "Optional, defaults to resource group location. The location of the resources."
+              }
+            }
+          },
+          "resources": [
+            {
+              "type": "Microsoft.Web/serverfarms",
+              "apiVersion": "2022-09-01",
+              "name": "[parameters('appServicePlanName')]",
+              "location": "[parameters('location')]",
+              "sku": {
+                "name": "[parameters('appServicePlanSKU')]"
+              },
+              "kind": "linux",
+              "properties": {
+                "reserved": true
+              }
+            },
+            {
+              "type": "Microsoft.Web/sites",
+              "apiVersion": "2022-09-01",
+              "name": "[parameters('webAppName')]",
+              "tags": {
+                "azd-service-name": "frontend"
+              },
+              "location": "[parameters('location')]",
+              "properties": {
+                "serverFarmId": "[resourceId('Microsoft.Web/serverfarms', parameters('appServicePlanName'))]",
+                "siteConfig": {
+                  "appSettings": [
+                    {
+                      "name": "BLOB_SAS_TOKEN",
+                      "value": "[parameters('blobSASToken')]"
+                    },
+                    {
+                      "name": "AZURE_SEARCH_ENDPOINT",
+                      "value": "[format('https://{0}.search.windows.net', parameters('azureSearchName'))]"
+                    },
+                    {
+                      "name": "AZURE_SEARCH_KEY",
+                      "value": "[listAdminKeys(extensionResourceId(format('/subscriptions/{0}/resourceGroups/{1}', subscription().subscriptionId, parameters('resourceGroupSearch')), 'Microsoft.Search/searchServices', parameters('azureSearchName')), '2021-04-01-preview').primaryKey]"
+                    },
+                    {
+                      "name": "AZURE_SEARCH_API_VERSION",
+                      "value": "[parameters('azureSearchAPIVersion')]"
+                    },
+                    {
+                      "name": "AZURE_OPENAI_ENDPOINT",
+                      "value": "[format('https://{0}.openai.azure.com/', parameters('azureOpenAIName'))]"
+                    },
+                    {
+                      "name": "AZURE_OPENAI_API_KEY",
+                      "value": "[parameters('azureOpenAIAPIKey')]"
+                    },
+                    {
+                      "name": "AZURE_OPENAI_MODEL_NAME",
+                      "value": "[parameters('azureOpenAIModelName')]"
+                    },
+                    {
+                      "name": "AZURE_OPENAI_API_VERSION",
+                      "value": "[parameters('azureOpenAIAPIVersion')]"
+                    },
+                    {
+                      "name": "SCM_DO_BUILD_DURING_DEPLOYMENT",
+                      "value": "true"
+                    }
+                  ]
+                }
+              },
+              "dependsOn": [
+                "[resourceId('Microsoft.Web/serverfarms', parameters('appServicePlanName'))]"
+              ]
+            },
+            {
+              "type": "Microsoft.Web/sites/config",
+              "apiVersion": "2022-09-01",
+              "name": "[format('{0}/{1}', parameters('webAppName'), 'web')]",
+              "properties": {
+                "linuxFxVersion": "PYTHON|3.10",
+                "alwaysOn": true,
+                "appCommandLine": "python -m streamlit run Home.py --server.port 8000 --server.address 0.0.0.0"
+              },
+              "dependsOn": [
+                "[resourceId('Microsoft.Web/sites', parameters('webAppName'))]"
+              ]
+            }
+          ],
+          "outputs": {
+            "webAppURL": {
+              "type": "string",
+              "value": "[reference(resourceId('Microsoft.Web/sites', parameters('webAppName')), '2022-09-01').defaultHostName]"
+            },
+            "webAppName": {
+              "type": "string",
+              "value": "[parameters('webAppName')]"
+            }
+          }
+        }
+      },
+      "dependsOn": [
+        "[extensionResourceId(format('/subscriptions/{0}/resourceGroups/{1}', subscription().subscriptionId, parameters('resourceGroupName')), 'Microsoft.Resources/deployments', 'infra')]",
+        "[extensionResourceId(format('/subscriptions/{0}/resourceGroups/{1}', subscription().subscriptionId, parameters('resourceGroupName')), 'Microsoft.Resources/deployments', 'openai')]"
+      ]
+    }
+  ],
+  "outputs": {
+    "AZURE_RESOURCE_GROUP": {
+      "type": "string",
+      "value": "[parameters('resourceGroupName')]"
+    },
+    "AZURE_OPENAI_SERVICE": {
+      "type": "string",
+      "value": "[reference(extensionResourceId(format('/subscriptions/{0}/resourceGroups/{1}', subscription().subscriptionId, parameters('resourceGroupName')), 'Microsoft.Resources/deployments', 'openai'), '2022-09-01').outputs.name.value]"
+    },
+    "AZURE_FRONTEND_WEBAPP_NAME": {
+      "type": "string",
+      "value": "[reference(extensionResourceId(format('/subscriptions/{0}/resourceGroups/{1}', subscription().subscriptionId, parameters('resourceGroupName')), 'Microsoft.Resources/deployments', 'frontend'), '2022-09-01').outputs.webAppName.value]"
+    },
+    "AZURE_SEARCH_ENDPOINT": {
+      "type": "string",
+      "value": "[reference(extensionResourceId(format('/subscriptions/{0}/resourceGroups/{1}', subscription().subscriptionId, parameters('resourceGroupName')), 'Microsoft.Resources/deployments', 'infra'), '2022-09-01').outputs.azureSearchEndpoint.value]"
+    },
+    "AZURE_BLOB_STORAGE_ACCOUNT_NAME": {
+      "type": "string",
+      "value": "[reference(extensionResourceId(format('/subscriptions/{0}/resourceGroups/{1}', subscription().subscriptionId, parameters('resourceGroupName')), 'Microsoft.Resources/deployments', 'infra'), '2022-09-01').outputs.blobStorageAccountName.value]"
+    }
+  }
+}

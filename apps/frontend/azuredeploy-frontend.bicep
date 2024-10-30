@@ -14,38 +14,31 @@ param appServicePlanSKU string = 'S3'
 @description('Optional. The name of the App Service Plan.')
 param appServicePlanName string = 'AppServicePlan-Frontend-${uniqueString(resourceGroup().id)}'
 
-@description('Required. The name of your Bot Service.')
-param botServiceName string
-
-@description('Required. The key to the direct line channel of your bot.')
-@secure()
-param botDirectLineChannelKey string
-
 @description('Required. The SAS token for the Azure Storage Account hosting your data')
 @secure()
-param blobSASToken string 
+param blobSASToken string
 
 @description('Optional. The name of the resource group where the resources (Azure Search etc.) where deployed previously. Defaults to current resource group.')
 param resourceGroupSearch string = resourceGroup().name
 
 @description('Required. The name of the Azure Search service deployed previously.')
-param azureSearchName string 
+param azureSearchName string
 
 @description('Optional. The API version of the Azure Search.')
 param azureSearchAPIVersion string = '2023-10-01-preview'
 
 @description('Required. The name of the Azure OpenAI resource deployed previously.')
-param azureOpenAIName string 
+param azureOpenAIName string
 
 @description('Required. The API key of the Azure OpenAI resource deployed previously.')
 @secure()
-param azureOpenAIAPIKey string 
+param azureOpenAIAPIKey string
 
 @description('Optional. The model name of the Azure OpenAI.')
-param azureOpenAIModelName string = 'gpt-35-turbo-1106'
+param azureOpenAIModelName string = 'gpt-4o'
 
 @description('Optional. The API version of the Azure OpenAI.')
-param azureOpenAIAPIVersion string = '2023-12-01-preview'
+param azureOpenAIAPIVersion string = '2024-05-01-preview'
 
 @description('Optional, defaults to resource group location. The location of the resources.')
 param location string = resourceGroup().location
@@ -78,14 +71,6 @@ resource webApp 'Microsoft.Web/sites@2022-09-01' = {
     serverFarmId: appServicePlan.id
     siteConfig: {
       appSettings: [
-        {
-          name: 'BOT_SERVICE_NAME'
-          value: botServiceName
-        }
-        {
-          name: 'BOT_DIRECTLINE_SECRET_KEY'
-          value: botDirectLineChannelKey
-        }
         {
           name: 'BLOB_SAS_TOKEN'
           value: blobSASToken
