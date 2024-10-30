@@ -120,3 +120,4 @@ output AZURE_FRONTEND_WEBAPP_NAME string = frontend.outputs.webAppName
 output AZURE_SEARCH_ENDPOINT string = infra.outputs.azureSearchEndpoint
 output AZURE_BLOB_STORAGE_ACCOUNT_NAME string = infra.outputs.blobStorageAccountName
 #disable-next-line outputs-should-not-contain-secrets
+//change

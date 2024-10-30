@@ -418,10 +418,9 @@ def get_documents(query, indexes, k, headers, params, title_prefixes=None):
     return agg_search_results,index
 
 
-
+#Define the function to get search results asynchronously
 
 @timer
-@debug
 def get_search_results_async(query: str, indexes: list, spinner_placeholder, k: int = 5, reranker_threshold: int = 1, sas_token: str = "",title_prefixes=None) -> OrderedDict:
     """
     Performs a search across multiple indexes, processes the results, and links them to their corresponding IDs, while handling PDF downloads and term search.

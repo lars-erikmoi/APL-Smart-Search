@@ -39,7 +39,7 @@ except Exception as e:
 # Set page configuration
 st.set_page_config(page_title="APL Smart Search", page_icon="📖", layout="wide", )
 st.set_option("client.toolbarMode", "viewer")
-st.logo("APLNOV1.png")
+st.logo("APLNOV.png")
 
 # Add custom CSS styles
 st.markdown("""
@@ -208,7 +208,7 @@ def handle_clear_button():
     st.session_state.show_results = False
 
 # Buttons display logic
-
+# Display the "Clear" button only if the search is done
 
 #### Session State Variables ####
 def clear_submit():
